@@ -1,0 +1,20 @@
+# ===== Rust / Tauri 构建产物 =====
+src-tauri/target/
+src-tauri/gen/
+
+# ===== Node（若后续加前端工具链）=====
+node_modules/
+
+# ===== 签名私钥（绝不能入库！）=====
+*.key
+*.key.pub
+
+# ===== 系统与编辑器杂项 =====
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+
+# ===== 日志 =====
+*.log
