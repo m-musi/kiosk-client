@@ -25,13 +25,12 @@ jobs:
       - name: 缓存编译依赖
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: kiosk-client/src-tauri
+          workspaces: src-tauri
 
       - name: 安装 tauri-cli
         run: cargo install tauri-cli --version "^2" --locked
 
       - name: 构建 macOS dmg
-        working-directory: kiosk-client
         run: cargo tauri build --bundles dmg
 
       - name: 上传安装包
@@ -39,5 +38,5 @@ jobs:
         with:
           name: macos-dmg
           path: |
-            kiosk-client/src-tauri/target/release/bundle/dmg/*.dmg
-            kiosk-client/src-tauri/target/release/bundle/macos/*.app
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/*.app
