@@ -1,0 +1,39 @@
+# Windows 安装包云构建（GitHub Actions）
+# 与 build-macos.yml 对称：手动触发或推 v* tag 自动触发
+# 产物：NSIS 安装包 .exe（Artifacts → windows-exe）
+
+name: build-windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存编译依赖
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装 tauri-cli
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: 构建 Windows NSIS 安装包
+        run: cargo tauri build --bundles nsis
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/kiosk-client.exe
