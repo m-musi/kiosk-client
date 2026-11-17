@@ -94,6 +94,7 @@ pub use windows::{activate, precheck_and_log};
 mod macos;
 
 #[cfg(target_os = "macos")]
+#[allow(unused_imports)]
 pub use macos::{activate, precheck_and_log};
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
