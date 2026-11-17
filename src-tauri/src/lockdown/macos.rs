@@ -1,8 +1,6 @@
 //! macOS 平台锁定实现
 //!
-//! 当前为跨平台基础版（Tauri API 层），NSApplicationPresentationOptions 原生增强见 README。
-//!
-//! 原生 Kiosk 增强（阶段二，需 objc2-app-kit，等效 Swift 代码）：
+//! 核心：NSApplicationPresentationOptions（AppKit 系统级 Kiosk API），等效于 Swift：
 //! ```swift
 //! NSApp.presentationOptions = [
 //!     .hideDock,                    // Dock 彻底隐藏且禁用
@@ -12,13 +10,19 @@
 //!     .disableForceQuit,            // Cmd+Opt+Esc 强制退出面板禁用
 //!     .disableSessionTermination,   // 电源键重启/关机面板禁用
 //!     .disableHideApplication,
+//!     .disableMissionControl,       // Mission Control（调度中心）禁用
+//!     .disableNotificationCenter,   // 通知中心禁用
 //!     .fullScreen
 //! ]
-//! // 窗口移除关闭按钮（防 Cmd+W）：
-//! window.styleMask = window.styleMask & ~NSWindowStyleMaskClosable
 //! ```
-//! Rust 侧调用路径：objc2-app-kit 的 NSApplication::sharedApplication()
-//! 设 setPresentationOptions，或用 msg_send 调用。
+//! 通过 objc2 的 msg_send 以 NSUInteger 位掩码调用，避免依赖生成的类型绑定。
+
+use std::thread;
+use std::time::Duration;
+
+use objc2::class;
+use objc2::msg_send;
+use objc2::runtime::AnyObject;
 
 use tauri::WebviewWindow;
 
@@ -27,17 +31,61 @@ use super::{
     REMOTE_CONTROL_APPS,
 };
 
+/// Kiosk 演示模式位掩码（NSApplicationPresentationOptions，AppKit 头文件定义）
+const OPT_HIDE_DOCK: u64 = 1 << 1;
+const OPT_HIDE_MENU_BAR: u64 = 1 << 3;
+const OPT_DISABLE_HIDE_APPLICATION: u64 = 1 << 4;
+const OPT_DISABLE_APPLE_MENU: u64 = 1 << 6;
+const OPT_DISABLE_PROCESS_SWITCHING: u64 = 1 << 7; // 禁 Cmd+Tab
+const OPT_DISABLE_FORCE_QUIT: u64 = 1 << 8; // 禁 Cmd+Opt+Esc
+const OPT_DISABLE_SESSION_TERMINATION: u64 = 1 << 9; // 禁电源键重启/关机面板
+const OPT_DISABLE_MISSION_CONTROL: u64 = 1 << 11;
+const OPT_DISABLE_NOTIFICATION_CENTER: u64 = 1 << 12;
+const OPT_FULL_SCREEN: u64 = 1 << 15;
+
+const PRESENTATION_KIOSK: u64 = OPT_HIDE_DOCK
+    | OPT_HIDE_MENU_BAR
+    | OPT_DISABLE_HIDE_APPLICATION
+    | OPT_DISABLE_APPLE_MENU
+    | OPT_DISABLE_PROCESS_SWITCHING
+    | OPT_DISABLE_FORCE_QUIT
+    | OPT_DISABLE_SESSION_TERMINATION
+    | OPT_DISABLE_MISSION_CONTROL
+    | OPT_DISABLE_NOTIFICATION_CENTER
+    | OPT_FULL_SCREEN;
+
+/// 在主线程调用 NSApplication setPresentationOptions
+pub fn apply_presentation_options() {
+    unsafe {
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        let _: () = msg_send![app, setPresentationOptions: PRESENTATION_KIOSK];
+    }
+}
+
 pub fn activate(window: &WebviewWindow) {
-    // 基础霸屏（全屏 + 无边框 + 置顶）
+    // 窗口层：全屏 + 无边框 + 置顶
     let _ = window.set_fullscreen(true);
     let _ = window.set_decorations(false);
     let _ = window.set_always_on_top(true);
     let _ = window.set_focus();
 
+    // 系统层：Kiosk 演示模式（禁 Dock / Cmd+Tab / 强退面板等）
+    apply_presentation_options();
+
     precheck_and_log();
 
+    // presentationOptions 会在应用失焦等场景被系统重置，每 5s 在主线程重新断言
+    let win = window.clone();
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_secs(5));
+        let _ = win.run_on_main_thread(apply_presentation_options);
+    });
+
     // 进程监控（跨平台 sysinfo）
-    std::thread::spawn(process_watcher);
+    thread::spawn(process_watcher);
 }
 
 pub fn precheck_and_log() {
@@ -74,6 +122,6 @@ fn process_watcher() {
                 let _ = process.kill();
             }
         }
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        thread::sleep(Duration::from_secs(2));
     }
 }
