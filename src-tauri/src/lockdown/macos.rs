@@ -15,8 +15,13 @@
 //!     .fullScreen
 //! ]
 //! ```
-//! 通过 objc2 的 msg_send 以 NSUInteger 位掩码调用，避免依赖生成的类型绑定。
+//!
+//! ⚠️ 关键特性：这组选项**只在应用处于激活（frontmost）状态时被系统执行**。
+//! 因此除了设置选项，还必须有「前台守护」：周期性检查 frontmostApplication，
+//! 若不是本进程，立即 activateIgnoringOtherApps 夺回前台并重新断言选项。
 
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::thread;
 use std::time::Duration;
 
@@ -54,14 +59,63 @@ const PRESENTATION_KIOSK: u64 = OPT_HIDE_DOCK
     | OPT_DISABLE_NOTIFICATION_CENTER
     | OPT_FULL_SCREEN;
 
-/// 在主线程调用 NSApplication setPresentationOptions
-pub fn apply_presentation_options() {
+/// 轻量文件日志，写入 /tmp/elecbalance-kiosk.log，便于在用户机器上验证锁定状态
+fn klog(msg: &str) {
+    let path = std::path::PathBuf::from("/tmp/elecbalance-kiosk.log");
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(f, "[{ts}] {msg}");
+    }
+}
+
+/// 主线程调用：设置 Kiosk 演示模式选项，并回读校验
+fn apply_presentation_options() {
+    unsafe {
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        if app.is_null() {
+            klog("apply_presentation_options: sharedApplication is null");
+            return;
+        }
+        let _: () = msg_send![app, setPresentationOptions: PRESENTATION_KIOSK];
+        let cur: u64 = msg_send![app, presentationOptions];
+        if cur != PRESENTATION_KIOSK {
+            klog(&format!(
+                "presentationOptions mismatch: want={PRESENTATION_KIOSK} got={cur}"
+            ));
+        }
+    }
+}
+
+/// 当前前台应用的 PID（0 = 未知）
+unsafe fn frontmost_pid() -> i32 {
+    let ws: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+    if ws.is_null() {
+        return 0;
+    }
+    let front: *mut AnyObject = msg_send![ws, frontmostApplication];
+    if front.is_null() {
+        return 0;
+    }
+    let pid: i32 = msg_send![front, processIdentifier];
+    pid
+}
+
+/// 主线程调用：确保本应用处于前台，否则夺回并重新断言 Kiosk 选项
+fn kiosk_tick() {
     unsafe {
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
         if app.is_null() {
             return;
         }
-        let _: () = msg_send![app, setPresentationOptions: PRESENTATION_KIOSK];
+        let front = frontmost_pid();
+        if front != 0 && front != std::process::id() as i32 {
+            klog(&format!("frontmost stolen by pid {front}, reclaiming"));
+            let _: () = msg_send![app, activateIgnoringOtherApps: true];
+        }
+        apply_presentation_options();
     }
 }
 
@@ -72,16 +126,28 @@ pub fn activate(window: &WebviewWindow) {
     let _ = window.set_always_on_top(true);
     let _ = window.set_focus();
 
-    // 系统层：Kiosk 演示模式（禁 Dock / Cmd+Tab / 强退面板等）
-    apply_presentation_options();
+    // 立即激活应用并设置 Kiosk 选项（必须在主线程）
+    let _ = window.run_on_main_thread(|| {
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            if !app.is_null() {
+                let _: () = msg_send![app, activateIgnoringOtherApps: true];
+            }
+        }
+        apply_presentation_options();
+        klog(&format!(
+            "kiosk activated, pid={}, options={PRESENTATION_KIOSK}",
+            std::process::id()
+        ));
+    });
 
     precheck_and_log();
 
-    // presentationOptions 会在应用失焦等场景被系统重置，每 5s 在主线程重新断言
+    // 前台守护：每 2s 检查 frontmost 是否被抢占，被抢则夺回 + 重新断言选项
     let win = window.clone();
     thread::spawn(move || loop {
-        thread::sleep(Duration::from_secs(5));
-        let _ = win.run_on_main_thread(apply_presentation_options);
+        thread::sleep(Duration::from_secs(2));
+        let _ = win.run_on_main_thread(kiosk_tick);
     });
 
     // 进程监控（跨平台 sysinfo）
@@ -102,6 +168,7 @@ pub fn precheck_and_log() {
     }
     if !found.is_empty() {
         eprintln!("precheck: 检测到违规软件 {:?}", found);
+        klog(&format!("precheck: found {:?}", found));
     }
 }
 
