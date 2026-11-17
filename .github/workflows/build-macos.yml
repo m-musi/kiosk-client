@@ -33,10 +33,24 @@ jobs:
       - name: 构建 macOS dmg
         run: cargo tauri build --bundles dmg
 
+      # ad-hoc 自签：有签名的 app 才会有「仍要打开」入口，完全未签名会被报"已损坏"且无绕过选项
+      - name: Ad-hoc 自签并重打 dmg
+        run: |
+          set -e
+          DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -n 1)
+          MOUNT=/tmp/kiosk-mount
+          hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -quiet
+          cp -R "$MOUNT/Elecbalance Kiosk.app" /tmp/signed-app
+          hdiutil detach "$MOUNT" -quiet
+          codesign --force --deep -s - "/tmp/signed-app/Elecbalance Kiosk.app"
+          codesign --verify --deep --strict "/tmp/signed-app/Elecbalance Kiosk.app"
+          cp -R /tmp/signed-app ./signed-app
+          hdiutil create -volname "Elecbalance Kiosk" -srcfolder /tmp/signed-app -ov -format UDZO src-tauri/target/release/bundle/dmg/Elecbalance-Kiosk-signed.dmg
+
       - name: 上传安装包
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg
           path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/*.app
+            src-tauri/target/release/bundle/dmg/Elecbalance-Kiosk-signed.dmg
+            signed-app/*.app
