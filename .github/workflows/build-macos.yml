@@ -38,12 +38,21 @@ jobs:
         run: |
           set -e
           DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -n 1)
+          echo "DMG file: $DMG"
           MOUNT=/tmp/kiosk-mount
-          hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -quiet
-          cp -R "$MOUNT/Elecbalance Kiosk.app" /tmp/signed-app
-          hdiutil detach "$MOUNT" -quiet
-          codesign --force --deep -s - "/tmp/signed-app/Elecbalance Kiosk.app"
-          codesign --verify --deep --strict "/tmp/signed-app/Elecbalance Kiosk.app"
+          rm -rf "$MOUNT" /tmp/signed-app signed-app
+          mkdir -p "$MOUNT" /tmp/signed-app
+          hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse
+          echo "--- dmg 卷内容 ---"
+          ls -la "$MOUNT"
+          APP_SRC=$(find "$MOUNT" -maxdepth 2 -name "*.app" | head -n 1)
+          echo "App found: $APP_SRC"
+          cp -R "$APP_SRC" /tmp/signed-app/
+          hdiutil detach "$MOUNT"
+          APP_NAME=$(basename "$APP_SRC")
+          codesign --force --deep -s - "/tmp/signed-app/$APP_NAME"
+          codesign --verify --deep --strict "/tmp/signed-app/$APP_NAME"
+          echo "签名校验通过: $APP_NAME"
           cp -R /tmp/signed-app ./signed-app
           hdiutil create -volname "Elecbalance Kiosk" -srcfolder /tmp/signed-app -ov -format UDZO src-tauri/target/release/bundle/dmg/Elecbalance-Kiosk-signed.dmg
 
