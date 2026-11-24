@@ -120,38 +120,51 @@ pub fn precheck_and_log() {
 
 #[cfg(windows)]
 fn focus_guardian(hwnd: isize) {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, VK_MENU, KEYEVENTF_KEYUP};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, IsIconic, SetForegroundWindow, SetWindowPos, ShowWindow,
-        HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOWMAXIMIZED,
+        GetForegroundWindow, GetWindowThreadProcessId, IsIconic, SetForegroundWindow,
+        SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+        SW_SHOWMAXIMIZED,
     };
 
     let target = hwnd as isize;
     loop {
         thread::sleep(Duration::from_millis(500));
         unsafe {
-            let target_h: windows_sys::Win32::Foundation::HWND = target as *mut core::ffi::c_void;
+            let target_h: HWND = target as *mut core::ffi::c_void;
             // 窗口被最小化则恢复
             if IsIconic(target_h) != 0 {
                 ShowWindow(target_h, SW_SHOWMAXIMIZED);
             }
-            // 焦点不在本窗口 → 用 Alt 键辅助夺回（绕过 SetForegroundWindow 限制）
             let fg = GetForegroundWindow();
-            if fg != target_h {
+            // 前台窗口属于本进程的其他窗口（如管理员口令输入窗）→ 不抢占、不压顶，
+            // 让口令窗正常接收键盘输入
+            let mut fg_pid: u32 = 0;
+            if !fg.is_null() {
+                GetWindowThreadProcessId(fg, &mut fg_pid);
+            }
+            let fg_is_ours = fg_pid != 0 && fg_pid == GetCurrentProcessId();
+
+            if !fg_is_ours && fg != target_h {
+                // 焦点不在本窗口 → 用 Alt 键辅助夺回（绕过 SetForegroundWindow 限制）
                 keybd_event(VK_MENU as u8, 0, 0, 0);
                 let _ = SetForegroundWindow(target_h);
                 keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
             }
-            // 重新钉 TOPMOST，防止其他窗口压顶
-            SetWindowPos(
-                target_h,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-            );
+            if !fg_is_ours {
+                // 重新钉 TOPMOST，防止其他窗口压顶
+                SetWindowPos(
+                    target_h,
+                    HWND_TOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                );
+            }
         }
     }
 }

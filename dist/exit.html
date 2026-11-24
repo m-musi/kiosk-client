@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>管理员退出</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: #f4f7f6;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+    }
+    .card {
+      width: 340px;
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+      padding: 28px 26px;
+    }
+    h2 { font-size: 17px; color: #0f6e56; margin-bottom: 6px; }
+    p.tip { font-size: 12px; color: #8a9a94; margin-bottom: 18px; }
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #ccd5d2;
+      border-radius: 6px;
+      font-size: 14px;
+      outline: none;
+      margin-bottom: 6px;
+    }
+    input:focus { border-color: #169e8c; }
+    .err { font-size: 12px; color: #d64541; height: 18px; margin-bottom: 8px; }
+    .btns { display: flex; gap: 10px; }
+    button {
+      flex: 1;
+      padding: 10px 0;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .btn-cancel { background: #e8edeb; color: #45524d; }
+    .btn-ok { background: #169e8c; color: #fff; }
+    .btn-ok:disabled { opacity: 0.6; cursor: wait; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>管理员退出</h2>
+    <p class="tip">请输入管理员口令以退出霸屏锁定</p>
+    <input id="pwd" type="password" placeholder="管理员口令" autocomplete="off" autofocus />
+    <div class="err" id="err"></div>
+    <div class="btns">
+      <button class="btn-cancel" onclick="cancel()">取消</button>
+      <button class="btn-ok" id="ok" onclick="tryExit()">退出系统</button>
+    </div>
+  </div>
+  <script>
+    const { invoke } = window.__TAURI__.core;
+
+    function setError(msg) {
+      document.getElementById("err").textContent = msg || "";
+    }
+
+    async function tryExit() {
+      const pwd = document.getElementById("pwd").value;
+      if (!pwd) { setError("请输入口令"); return; }
+      const btn = document.getElementById("ok");
+      btn.disabled = true;
+      setError("");
+      try {
+        await invoke("admin_exit", { password: pwd });
+        // 成功后应用直接退出，不会走到这里
+      } catch (e) {
+        setError(typeof e === "string" ? e : "口令错误");
+        document.getElementById("pwd").value = "";
+        document.getElementById("pwd").focus();
+      }
+      btn.disabled = false;
+    }
+
+    function cancel() {
+      invoke("admin_close");
+    }
+
+    document.getElementById("pwd").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") tryExit();
+    });
+    document.getElementById("pwd").focus();
+  </script>
+</body>
+</html>

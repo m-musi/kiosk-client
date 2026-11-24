@@ -9,6 +9,16 @@
 #[allow(dead_code)]
 pub const DEFAULT_URL: &str = "https://sim.elecbalance.com/login?queryCode=1794879926545";
 
+// ============ 管理员退出 ============
+// 按下热键呼出口令输入窗，口令正确则解锁退出；错误则拒绝并记录。
+// 注意：口令编译进二进制，属于"防普通用户"强度；如需更强可改为云端校验。
+
+/// 管理员退出热键（Ctrl+Alt+Shift+Q，未被键盘钩子拦截）
+pub const ADMIN_EXIT_HOTKEY: &str = "ctrl+alt+shift+q";
+
+/// 管理员退出口令（修改后重新打包生效）
+pub const ADMIN_PASSWORD: &str = "elecbalance2026";
+
 // ============ 启动安全门禁 ============
 // 窗口隐藏状态下执行：检测分屏（多显示器）与远控软件，
 // 不通过则弹窗（重试检测 / 退出系统），通过后调用方再显示窗口进入霸屏。

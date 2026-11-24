@@ -42,18 +42,25 @@ cargo tauri build
 
 ### macOS 构建
 
-macOS 包只能在 Mac 系统上产出（Apple SDK 限制，Windows 无法交叉编译）。两种方式：
+macOS 包只能在 Mac 系统上产出（Apple SDK 限制，Windows 无法交叉编译）；同理 Windows 的
+NSIS 包也无法在 macOS 上产出。两端的云构建配置均已内置：
 
-- **云构建（推荐，无需 Mac 设备）**：工程已内置 GitHub Actions 配置
-  `.github/workflows/build-macos.yml`，推到 GitHub 后在 Actions 页手动运行
-  （或推 `v*` tag 自动触发），完成后从 Artifacts 下载 `.dmg`。
-  私有仓库有免费 macOS 分钟额度，公开仓库不限。
-- **本机构建**：在任意 Mac 上：
+- **`.github/workflows/build-macos.yml`**：Actions 页手动运行（或推 `v*` tag）→
+  Artifacts 下载 `.dmg` / `.app`
+- **`.github/workflows/build-windows.yml`**：同上 → Artifacts 下载 NSIS 安装包 `.exe`
+
+私有仓库有免费云构建分钟额度，公开仓库不限。
+
+- **本机构建**：在对应系统的机器上：
 
 ```bash
+# macOS（Mac 机器）
 cd kiosk-client/src-tauri
-cargo run            # 基础锁定版（全屏 + 进程监控）
 cargo tauri build --bundles dmg
+
+# Windows（Windows 机器）
+cd kiosk-client
+cargo tauri build
 ```
 
 原生 Kiosk 增强（hideDock / disableProcessSwitching / disableForceQuit 等）参考
@@ -74,16 +81,33 @@ cargo tauri build --bundles dmg
 | 启动预检 | 启动时全量扫描并记录日志 | 双平台 |
 | 单实例 | tauri-plugin-single-instance | 双平台 |
 | 日志 | `%TEMP%/elecbalance-kiosk.log` | Windows |
+| 日志 | `/tmp/elecbalance-kiosk.log` | macOS |
+| **管理员退出** | 全局热键 `Ctrl+Alt+Shift+Q` → 置顶口令窗 → 口令正确解锁退出，错误拒绝并记录（错误响应延迟 1s 防暴力尝试） | 双平台 |
 
 ## 关键配置（`src-tauri/src/lockdown/mod.rs`）
 
 ```rust
-pub const AUTO_KILL_REMOTE: bool = true;        // 远控软件：检测到即终止
+pub const AUTO_KILL_REMOTE: bool = true;         // 远控软件：检测到即终止
 pub const AUTO_KILL_COMMUNICATION: bool = false; // 通讯软件：仅告警，按需改 true
+pub const ADMIN_EXIT_HOTKEY: &str = "ctrl+alt+shift+q"; // 管理员退出热键
+pub const ADMIN_PASSWORD: &str = "elecbalance2026";     // 管理员退出口令，修改后重新打包生效
 ```
 
 黑名单 `REMOTE_CONTROL_APPS` / `COMMUNICATION_APPS` 同文件维护，
 生产环境建议改为云端特征库热更新。
+
+## 管理员退出
+
+霸屏状态下按 **`Ctrl+Alt+Shift+Q`**（Windows / macOS 通用，macOS 上为
+Control+Option+Shift+Q），弹出置顶口令输入窗：
+
+- 口令正确 → 立即解锁退出（键盘钩子、置顶、Kiosk 选项随进程退出自动失效）
+- 口令错误 → 提示「口令错误」，焦点拉回输入框，记录日志；每次错误延迟 1 秒防暴力尝试
+- 取消 / 关闭窗口 → 焦点自动还给霸屏主窗口，锁定不受影响
+- 口令窗打开期间，焦点守护不会抢占本进程窗口（输入正常）
+
+口令与热键在 `src-tauri/src/lockdown/mod.rs` 中修改，改后重新打包生效。
+注意：口令编译进二进制，属「防普通用户」强度；需要更强管控可改为云端校验口令。
 
 ## 已知边界（系统级安全底线，无法用客户端绕过）
 
@@ -149,4 +173,4 @@ cargo tauri build
 ## 后续增强路线
 
 见《rust-kiosk-client-技术路线.md》：WMI 进程事件订阅（毫秒级）、数字签名校验、
-云端特征库、违规上报、Windows Shell 替换部署包、退出管理员口令。
+云端特征库、违规上报、Windows Shell 替换部署包。
