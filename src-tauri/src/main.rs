@@ -117,11 +117,14 @@ fn chrono_like_stamp() -> String {
         .to_string()
 }
 
-/// 引导页实时轮询：返回是否有远程控制软件正在运行
+/// 引导页实时轮询：检测即终止远控进程，返回清理结果
 #[tauri::command]
 fn check_remote_software() -> serde_json::Value {
-    let apps = lockdown::running_remote_apps();
-    serde_json::json!({ "blocked": !apps.is_empty(), "apps": apps })
+    let (killed, apps) = lockdown::kill_remote_apps();
+    if !killed.is_empty() {
+        exam_log(&format!("检测阶段已终止远控进程：{}", killed.join("、")));
+    }
+    serde_json::json!({ "blocked": !apps.is_empty(), "apps": apps, "killed": killed })
 }
 
 /// 进入考试：复核环境 → 打开考试窗口 → 副屏遮挡 → 悬浮退出按钮 → 霸屏锁定
@@ -129,9 +132,12 @@ fn check_remote_software() -> serde_json::Value {
 #[tauri::command]
 async fn enter_exam(app: tauri::AppHandle) -> Result<(), String> {
     exam_log("enter_exam start");
-    let apps = lockdown::running_remote_apps();
+    let (killed, apps) = lockdown::kill_remote_apps();
+    if !killed.is_empty() {
+        exam_log(&format!("进入考试前已终止远控进程：{}", killed.join("、")));
+    }
     if !apps.is_empty() {
-        return Err(format!("请关闭远程软件：{}", apps.join("、")));
+        return Err(format!("远控进程无法终止，请手动退出：{}", apps.join("、")));
     }
     if let Some(exam) = app.get_webview_window("exam") {
         let _ = exam.set_focus();
@@ -187,15 +193,24 @@ async fn enter_exam(app: tauri::AppHandle) -> Result<(), String> {
     exam_log("monitor overlays done");
 
     // 悬浮退出按钮：置于考试网页上层
-    let (px, py, _pw, ph) = match &primary {
+    let (px, py, ph, scale) = match &primary {
         Some(m) => (
             m.position().x,
             m.position().y,
-            m.size().width as i32,
             m.size().height as i32,
+            m.scale_factor(),
         ),
-        None => (0, 0, 1366, 768),
+        None => (0, 0, 768, 1.0),
     };
+    // 坐标统一用物理像素：monitor 的 position/size 是物理像素，inner_size 传的却是逻辑像素。
+    // Retina(scale=2) 下 80 逻辑像素 = 160 物理像素，旧代码按 80 物理像素定位，
+    // 窗口底部溢出屏幕约 60px，按钮下半截被切掉。
+    let margin = 20.0_f64; // 距屏幕左/下各 20 物理像素
+    let fab_size = 48.0_f64; // 窗口=按钮尺寸（纯图标圆形按钮），两者一致
+    let win_h_physical = fab_size * scale;
+    let fab_x = (px as f64 + margin).round() as i32;
+    let fab_y = ((py + ph) as f64 - margin - win_h_physical).round() as i32;
+    let fab_pos = tauri::PhysicalPosition::new(fab_x, fab_y);
     let built = WebviewWindowBuilder::new(
         &app,
         "exam-fab",
@@ -207,13 +222,36 @@ async fn enter_exam(app: tauri::AppHandle) -> Result<(), String> {
     .always_on_top(true)
     .skip_taskbar(true)
     .transparent(true)
-    .inner_size(72.0, 72.0)
-    .position(px as f64, (py + ph - 96) as f64)
+    // 进入考试后 exam 窗口是 key window，fab 处于非活动态。
+    // macOS 默认会把非活动窗口的第一次点击用来激活窗口而不透传给 webview，
+    // 导致「第一次点没反应、要点第二次」。设为 true 让首次点击直达按钮。
+    .accept_first_mouse(true)
+    // 窗口=按钮尺寸，按钮在 HTML 里 width/height 100% 填满
+    .inner_size(fab_size, fab_size)
+    // builder 的 position 收逻辑像素；build 后再用 set_position 设物理像素精确覆盖
+    .position(fab_x as f64 / scale, fab_y as f64 / scale)
     .build();
     if let Ok(w) = built {
-        let _ = w.set_position(tauri::PhysicalPosition::new(px, py + ph - 96));
+        let _ = w.set_position(fab_pos);
+        // 透明无边框 + 非 key 窗口默认不接收 mouseMoved，导致 WKWebView 的
+        // CSS cursor:pointer 永远不触发，光标一直是箭头。打开这个开关让
+        // WebView 真正收到鼠标移动事件。
+        #[cfg(target_os = "macos")]
+        unsafe {
+            use objc2::msg_send;
+            use objc2::runtime::AnyObject;
+            if let Ok(ns_win) = w.ns_window() {
+                let ns_win = ns_win as *mut AnyObject;
+                let _: () = msg_send![ns_win, setAcceptsMouseMovedEvents: true];
+            }
+        }
+        // 第二重保险：设窗口级手型光标。不透明窗口下 cursor rect 能被正确应用。
+        let _ = w.set_cursor_icon(tauri::CursorIcon::Hand);
+        // 第三重：CSS cursor:pointer 已在 exit-fab.html 设好。
     }
-    exam_log("fab window done");
+    exam_log(&format!(
+        "fab window done pos=({fab_x},{fab_y}) scale={scale}"
+    ));
 
     if let Some(guide) = app.get_webview_window("main") {
         let _ = guide.hide();
@@ -232,10 +270,14 @@ async fn enter_exam(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn show_exit_confirm(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("exit-confirm") {
+        // 复用已创建的窗口。取消时只是 hide，必须显式 show 才会重新显示；
+        // 早期版本只调 set_focus 就 return，隐藏态窗口不会重现，表现为「点了没反应」。
+        let _ = w.show();
         let _ = w.set_focus();
+        exam_log("exit confirm shown (reuse)");
         return;
     }
-    let _ = WebviewWindowBuilder::new(
+    let built = WebviewWindowBuilder::new(
         &app,
         "exit-confirm",
         WebviewUrl::App("exam-exit-confirm.html".into()),
@@ -247,17 +289,30 @@ async fn show_exit_confirm(app: tauri::AppHandle) {
     .always_on_top(true)
     .center()
     .build();
+    match built {
+        Ok(w) => {
+            // 关键点：kiosk 演示模式下新建窗口不会自动获得前台可见性，
+            // 必须显式 show + focus，否则第一次点击「没反应」，要点第二次才显示。
+            let _ = w.show();
+            let _ = w.set_focus();
+            exam_log("exit confirm created + shown");
+        }
+        Err(e) => exam_log(&format!("exit confirm build failed: {e}")),
+    }
 }
 
-/// 取消退出：关闭确认窗，焦点还给考试窗口
+/// 取消退出：隐藏确认窗（不销毁），焦点还给考试窗口。
+/// 不能改用 close()：close 是异步销毁，紧接着再点悬浮按钮时会命中「正在关闭」的
+/// 句柄，show_exit_confirm 只 set_focus 不 show 也不重建，导致按钮失灵。
 #[tauri::command]
 fn cancel_exit_exam(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("exit-confirm") {
-        let _ = w.close();
+        let _ = w.hide();
     }
     if let Some(exam) = app.get_webview_window("exam") {
         let _ = exam.set_focus();
     }
+    exam_log("exit confirm cancelled (hidden)");
 }
 
 /// 确认退出：解除锁定、关闭考试相关窗口，回到引导页

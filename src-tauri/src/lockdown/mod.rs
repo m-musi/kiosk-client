@@ -47,6 +47,32 @@ pub fn running_remote_apps() -> Vec<String> {
     found
 }
 
+/// 终止所有命中黑名单的远程控制软件进程，并在短暂等待后复查。
+/// 返回 (成功发起终止的进程名, 复查后仍在运行的进程名)。
+/// 注意：必须排除自身 PID，避免把客户端自己结束掉。
+pub fn kill_remote_apps() -> (Vec<String>, Vec<String>) {
+    let mut killed = Vec::new();
+    let sys = sysinfo::System::new_all();
+    let self_pid = std::process::id();
+    for (pid, p) in sys.processes() {
+        if pid.as_u32() == self_pid {
+            continue;
+        }
+        let name = p.name().to_string();
+        if name_matches(&name.to_lowercase(), REMOTE_CONTROL_APPS) && p.kill() {
+            killed.push(name);
+        }
+    }
+    killed.sort();
+    killed.dedup();
+
+    if !killed.is_empty() {
+        // 给被终止的进程一点退出时间，避免刚发出信号就误判为仍在运行
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    (killed, running_remote_apps())
+}
+
 /// 进程名黑名单匹配（供各平台模块与引导页共用）
 pub fn name_matches(process_name: &str, patterns: &[&str]) -> bool {
     patterns.iter().any(|p| process_name.contains(p))

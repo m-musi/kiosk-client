@@ -37,27 +37,26 @@ use super::{
     REMOTE_CONTROL_APPS,
 };
 
-/// Kiosk 演示模式位掩码（NSApplicationPresentationOptions，AppKit 头文件定义）
-const OPT_HIDE_DOCK: u64 = 1 << 1;
-const OPT_HIDE_MENU_BAR: u64 = 1 << 3;
-const OPT_DISABLE_HIDE_APPLICATION: u64 = 1 << 4;
-const OPT_DISABLE_APPLE_MENU: u64 = 1 << 6;
-const OPT_DISABLE_PROCESS_SWITCHING: u64 = 1 << 7; // 禁 Cmd+Tab
-const OPT_DISABLE_FORCE_QUIT: u64 = 1 << 8; // 禁 Cmd+Opt+Esc
-const OPT_DISABLE_SESSION_TERMINATION: u64 = 1 << 9; // 禁电源键重启/关机面板
-const OPT_DISABLE_MISSION_CONTROL: u64 = 1 << 11;
-const OPT_DISABLE_NOTIFICATION_CENTER: u64 = 1 << 12;
-const OPT_FULL_SCREEN: u64 = 1 << 15;
+/// Kiosk 演示模式位掩码（NSApplicationPresentationOptions）
+/// 以下数值已用 Swift 读取 AppKit 枚举核对，勿凭记忆修改。
+const OPT_HIDE_DOCK: u64 = 1 << 1; // 2   hideDock
+const OPT_HIDE_MENU_BAR: u64 = 1 << 3; // 8   hideMenuBar
+const OPT_DISABLE_APPLE_MENU: u64 = 1 << 4; // 16  disableAppleMenu
+const OPT_DISABLE_PROCESS_SWITCHING: u64 = 1 << 5; // 32  disableProcessSwitching → 禁 Cmd+Tab
+const OPT_DISABLE_FORCE_QUIT: u64 = 1 << 6; // 64  disableForceQuit → 禁 Cmd+Opt+Esc
+const OPT_DISABLE_SESSION_TERMINATION: u64 = 1 << 7; // 128 disableSessionTermination
+const OPT_DISABLE_HIDE_APPLICATION: u64 = 1 << 8; // 256 disableHideApplication
+const OPT_FULL_SCREEN: u64 = 1 << 10; // 1024 fullScreen
+// 注：AppKit 没有「禁用 Mission Control / 通知中心」的 presentation 选项，
+// 1<<11 是 autoHideToolbar、1<<12 是 disableCursorLocationAssistance，不要误用。
 
 const PRESENTATION_KIOSK: u64 = OPT_HIDE_DOCK
     | OPT_HIDE_MENU_BAR
-    | OPT_DISABLE_HIDE_APPLICATION
     | OPT_DISABLE_APPLE_MENU
     | OPT_DISABLE_PROCESS_SWITCHING
     | OPT_DISABLE_FORCE_QUIT
     | OPT_DISABLE_SESSION_TERMINATION
-    | OPT_DISABLE_MISSION_CONTROL
-    | OPT_DISABLE_NOTIFICATION_CENTER
+    | OPT_DISABLE_HIDE_APPLICATION
     | OPT_FULL_SCREEN;
 
 /// 轻量文件日志，写入 /tmp/elecbalance-kiosk.log，便于在用户机器上验证锁定状态
@@ -82,9 +81,30 @@ fn apply_presentation_options() {
         }
         let _: () = msg_send![app, setPresentationOptions: PRESENTATION_KIOSK];
         let cur: u64 = msg_send![app, presentationOptions];
-        if cur != PRESENTATION_KIOSK {
+        // 逐位校验关键锁定项，避免整值不等时看不出是哪一位丢了
+        let expected = [
+            ("hideDock", OPT_HIDE_DOCK),
+            ("hideMenuBar", OPT_HIDE_MENU_BAR),
+            ("disableAppleMenu", OPT_DISABLE_APPLE_MENU),
+            ("disableProcessSwitching", OPT_DISABLE_PROCESS_SWITCHING),
+            ("disableForceQuit", OPT_DISABLE_FORCE_QUIT),
+            ("disableSessionTermination", OPT_DISABLE_SESSION_TERMINATION),
+            ("disableHideApplication", OPT_DISABLE_HIDE_APPLICATION),
+            ("fullScreen", OPT_FULL_SCREEN),
+        ];
+        let lost: Vec<&str> = expected
+            .iter()
+            .filter(|(_, bit)| cur & bit == 0)
+            .map(|(name, _)| *name)
+            .collect();
+        if !lost.is_empty() {
             klog(&format!(
-                "presentationOptions mismatch: want={PRESENTATION_KIOSK} got={cur}"
+                "presentationOptions missing: [{}] want={PRESENTATION_KIOSK} got={cur}",
+                lost.join(", ")
+            ));
+        } else {
+            klog(&format!(
+                "presentationOptions all set: want={PRESENTATION_KIOSK} got={cur}"
             ));
         }
     }
