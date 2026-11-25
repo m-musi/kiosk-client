@@ -147,22 +147,23 @@ fn focus_guardian(hwnd: isize) {
                 let _ = SetForegroundWindow(target_h);
                 keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
             }
-            if !fg_is_ours {
-                SetWindowPos(
-                    target_h,
-                    HWND_TOPMOST,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-                );
-                // 重新把悬浮退出按钮置顶，避免被重新置顶的考试窗口盖住
-                let title: Vec<u16> = "退出考试".encode_utf16().chain(std::iter::once(0)).collect();
-                let fab = FindWindowW(std::ptr::null(), title.as_ptr());
-                if !fab.is_null() {
+            // 每个周期都重钉：考试窗 TOPMOST，悬浮退出按钮与退出确认窗必须在其之上。
+            // （activate 在悬浮窗创建后再次置顶考试窗会把悬浮窗压下去，必须持续补钉）
+            SetWindowPos(
+                target_h,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            );
+            for title in ["退出考试", "退出考试确认"] {
+                let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+                let w = FindWindowW(std::ptr::null(), wide.as_ptr());
+                if !w.is_null() {
                     SetWindowPos(
-                        fab,
+                        w,
                         HWND_TOPMOST,
                         0,
                         0,

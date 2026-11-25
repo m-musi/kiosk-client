@@ -187,7 +187,7 @@ async fn enter_exam(app: tauri::AppHandle) -> Result<(), String> {
     exam_log("monitor overlays done");
 
     // 悬浮退出按钮：置于考试网页上层
-    let (px, py, pw, ph) = match &primary {
+    let (px, py, _pw, ph) = match &primary {
         Some(m) => (
             m.position().x,
             m.position().y,
@@ -207,11 +207,11 @@ async fn enter_exam(app: tauri::AppHandle) -> Result<(), String> {
     .always_on_top(true)
     .skip_taskbar(true)
     .transparent(true)
-    .inner_size(96.0, 96.0)
-    .position((px + pw - 112) as f64, (py + ph - 112) as f64)
+    .inner_size(72.0, 72.0)
+    .position(px as f64, (py + ph - 96) as f64)
     .build();
     if let Ok(w) = built {
-        let _ = w.set_position(tauri::PhysicalPosition::new(px + pw - 112, py + ph - 112));
+        let _ = w.set_position(tauri::PhysicalPosition::new(px, py + ph - 96));
     }
     exam_log("fab window done");
 
