@@ -150,14 +150,17 @@
       try {
         const result = await invoke('check_remote_software');
         if (seq !== pollSeq) return;
+        const killed = result.killed || [];
         if (result.blocked) {
           setEnterEnabled(false);
-          statusText.textContent = '请关闭远程软件' + (result.apps.length ? '：' + result.apps.join('、') : '');
+          statusText.textContent = '远控进程无法自动结束，请手动退出' + (result.apps.length ? '：' + result.apps.join('、') : '');
           statusText.classList.add('bad');
           statusDot.classList.add('bad');
         } else {
           setEnterEnabled(true);
-          statusText.textContent = '环境检测通过，可以进入考试';
+          statusText.textContent = killed.length
+            ? '已自动结束远程软件：' + killed.join('、') + '，可以进入考试'
+            : '环境检测通过，可以进入考试';
           statusText.classList.remove('bad');
           statusDot.classList.remove('bad');
         }

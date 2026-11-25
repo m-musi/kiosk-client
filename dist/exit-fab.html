@@ -13,8 +13,9 @@
     }
     body { display: flex; align-items: center; justify-content: center; user-select: none; }
     button {
-      width: 72px;
-      height: 72px;
+      /* 填满窗口，按钮与窗口尺寸一致 */
+      width: 100%;
+      height: 100%;
       border: none;
       outline: none;
       border-radius: 50%;
@@ -22,15 +23,12 @@
       color: #fff;
       cursor: pointer;
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 3px;
-      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-      transition: transform 0.15s, background 0.15s;
+      transition: background 0.15s;
     }
-    button:hover { transform: scale(1.06); background: #128672; }
-    button span { font-size: 12px; line-height: 1; }
+    button:hover { background: #128672; }
+    button svg { width: 24px; height: 24px; }
   </style>
 </head>
 <body>
@@ -40,7 +38,6 @@
       <path d="M15 16l4-4-4-4"/>
       <path d="M19 12H9"/>
     </svg>
-    <span>退出考试</span>
   </button>
   <script>
     const { invoke } = window.__TAURI__.core;
