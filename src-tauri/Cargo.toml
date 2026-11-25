@@ -15,6 +15,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-global-shortcut = "2"
 sysinfo = "=0.30.13"
 serde_json = "1"
+url = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -22,6 +23,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_Threading",
+    "Win32_System_Registry",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

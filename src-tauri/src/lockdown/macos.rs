@@ -22,6 +22,7 @@
 
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 
@@ -126,6 +127,8 @@ pub fn activate(window: &WebviewWindow) {
     let _ = window.set_always_on_top(true);
     let _ = window.set_focus();
 
+    super::LOCK_ACTIVE.store(true, Ordering::SeqCst);
+
     // 立即激活应用并设置 Kiosk 选项（必须在主线程）
     let _ = window.run_on_main_thread(|| {
         unsafe {
@@ -147,11 +150,26 @@ pub fn activate(window: &WebviewWindow) {
     let win = window.clone();
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(2));
+        if !super::LOCK_ACTIVE.load(Ordering::SeqCst) {
+            break;
+        }
         let _ = win.run_on_main_thread(kiosk_tick);
     });
 
     // 进程监控（跨平台 sysinfo）
     thread::spawn(process_watcher);
+}
+
+/// 退出考试：清除 Kiosk 演示选项，回到普通桌面
+pub fn deactivate(window: &WebviewWindow) {
+    super::LOCK_ACTIVE.store(false, Ordering::SeqCst);
+    let _ = window.run_on_main_thread(|| unsafe {
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        if !app.is_null() {
+            let _: () = msg_send![app, setPresentationOptions: 0u64];
+        }
+    });
+    klog("kiosk deactivated, returned to guide");
 }
 
 pub fn precheck_and_log() {
@@ -175,6 +193,10 @@ pub fn precheck_and_log() {
 fn process_watcher() {
     let mut sys = sysinfo::System::new_all();
     loop {
+        thread::sleep(Duration::from_secs(2));
+        if !super::LOCK_ACTIVE.load(Ordering::SeqCst) {
+            break;
+        }
         sys.refresh_processes();
         for (pid, process) in sys.processes() {
             if pid.as_u32() == std::process::id() {
@@ -189,6 +211,5 @@ fn process_watcher() {
                 let _ = process.kill();
             }
         }
-        thread::sleep(Duration::from_secs(2));
     }
 }

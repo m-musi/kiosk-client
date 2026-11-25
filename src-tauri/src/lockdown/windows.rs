@@ -2,10 +2,12 @@
 //!
 //! 1. 低级键盘钩子（WH_KEYBOARD_LL）：拦截 Alt+Tab / Win / Ctrl+Shift+Esc / Alt+F4 等
 //! 2. 焦点守护线程：500ms 巡检，焦点被夺走立即夺回 + 保持 TOPMOST
-//! 3. 进程监控线程：sysinfo 每 2s 扫描黑名单（事件级方案见技术路线阶段二）
+//! 3. 触控板三指/四指手势：进入考试时禁用，退出考试时恢复
+//! 4. 进程监控线程：sysinfo 每 2s 扫描黑名单
 
 use std::collections::HashSet;
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -17,6 +19,8 @@ use super::{
     REMOTE_CONTROL_APPS,
 };
 
+static HOOK_STARTED: AtomicBool = AtomicBool::new(false);
+
 // ---------------- 日志（release 无控制台，落盘到临时目录） ----------------
 
 fn log_file() -> std::path::PathBuf {
@@ -24,11 +28,7 @@ fn log_file() -> std::path::PathBuf {
 }
 
 fn log(msg: &str) {
-    let line = format!(
-        "[{}] {}\n",
-        chrono_like_now(),
-        msg
-    );
+    let line = format!("[{}] {}\n", chrono_like_now(), msg);
     eprint!("{}", line);
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -45,11 +45,9 @@ fn chrono_like_now() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // 仅用于日志排序，粗略转成本地可读格式
     let days = secs / 86400;
     let rem = secs % 86400;
     let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    // 从 2026-01-01 起 rough 计算（仅日志用途，误差不影响排查）
     let years = 1970 + (days / 365);
     format!("{year:04}-{doy:03} {h:02}:{m:02}:{s:02}", year = years, doy = days % 365 + 1)
 }
@@ -57,34 +55,32 @@ fn chrono_like_now() -> String {
 // ---------------- 入口 ----------------
 
 pub fn activate(window: &WebviewWindow) {
-    // 1. 全屏 + 置顶 + 无边框（配置里已是 decorations:false）
     let _ = window.set_fullscreen(true);
     let _ = window.set_decorations(false);
     let _ = window.set_always_on_top(true);
     let _ = window.set_focus();
 
-    // 2. 启动时进程预检
+    super::LOCK_ACTIVE.store(true, Ordering::SeqCst);
     precheck_and_log();
+    gestures::disable();
 
-    // 3. 取原生 HWND，启动守护线程
-    #[cfg(windows)]
-    {
-        let hwnd = match window.hwnd() {
-            Ok(h) => h.0 as isize,
-            Err(_) => 0,
-        };
-        if hwnd != 0 {
-            // 焦点守护（主进程内直接启动，简单可靠）
-            std::thread::spawn(move || focus_guardian(hwnd));
-        }
-        // 低级键盘钩子需要独立线程 + 消息循环
+    let hwnd = window.hwnd().map(|h| h.0 as isize).unwrap_or(0);
+    if hwnd != 0 {
+        std::thread::spawn(move || focus_guardian(hwnd));
+    }
+    if !HOOK_STARTED.swap(true, Ordering::SeqCst) {
         std::thread::spawn(keyboard_hook_thread);
     }
-
-    // 4. 进程黑名单监控
     std::thread::spawn(process_watcher);
 
     log("kiosk activated");
+}
+
+/// 退出考试：关闭所有锁定，恢复用户触控板手势设置
+pub fn deactivate(_window: &WebviewWindow) {
+    super::LOCK_ACTIVE.store(false, Ordering::SeqCst);
+    gestures::restore();
+    log("kiosk deactivated, returned to guide");
 }
 
 // ---------------- 启动预检 ----------------
@@ -118,13 +114,12 @@ pub fn precheck_and_log() {
 
 // ---------------- 焦点守护 + TOPMOST ----------------
 
-#[cfg(windows)]
 fn focus_guardian(hwnd: isize) {
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, VK_MENU, KEYEVENTF_KEYUP};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowThreadProcessId, IsIconic, SetForegroundWindow,
+        FindWindowW, GetForegroundWindow, GetWindowThreadProcessId, IsIconic, SetForegroundWindow,
         SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
         SW_SHOWMAXIMIZED,
     };
@@ -132,15 +127,15 @@ fn focus_guardian(hwnd: isize) {
     let target = hwnd as isize;
     loop {
         thread::sleep(Duration::from_millis(500));
+        if !super::LOCK_ACTIVE.load(Ordering::SeqCst) {
+            break;
+        }
         unsafe {
             let target_h: HWND = target as *mut core::ffi::c_void;
-            // 窗口被最小化则恢复
             if IsIconic(target_h) != 0 {
                 ShowWindow(target_h, SW_SHOWMAXIMIZED);
             }
             let fg = GetForegroundWindow();
-            // 前台窗口属于本进程的其他窗口（如管理员口令输入窗）→ 不抢占、不压顶，
-            // 让口令窗正常接收键盘输入
             let mut fg_pid: u32 = 0;
             if !fg.is_null() {
                 GetWindowThreadProcessId(fg, &mut fg_pid);
@@ -148,13 +143,11 @@ fn focus_guardian(hwnd: isize) {
             let fg_is_ours = fg_pid != 0 && fg_pid == GetCurrentProcessId();
 
             if !fg_is_ours && fg != target_h {
-                // 焦点不在本窗口 → 用 Alt 键辅助夺回（绕过 SetForegroundWindow 限制）
                 keybd_event(VK_MENU as u8, 0, 0, 0);
                 let _ = SetForegroundWindow(target_h);
                 keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
             }
             if !fg_is_ours {
-                // 重新钉 TOPMOST，防止其他窗口压顶
                 SetWindowPos(
                     target_h,
                     HWND_TOPMOST,
@@ -164,6 +157,20 @@ fn focus_guardian(hwnd: isize) {
                     0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
                 );
+                // 重新把悬浮退出按钮置顶，避免被重新置顶的考试窗口盖住
+                let title: Vec<u16> = "退出考试".encode_utf16().chain(std::iter::once(0)).collect();
+                let fab = FindWindowW(std::ptr::null(), title.as_ptr());
+                if !fab.is_null() {
+                    SetWindowPos(
+                        fab,
+                        HWND_TOPMOST,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                    );
+                }
             }
         }
     }
@@ -171,7 +178,6 @@ fn focus_guardian(hwnd: isize) {
 
 // ---------------- 低级键盘钩子 ----------------
 
-#[cfg(windows)]
 fn keyboard_hook_thread() {
     use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -192,7 +198,11 @@ fn keyboard_hook_thread() {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        if code >= 0 && (wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN) {
+        // 引导页阶段不拦截任何按键
+        if code >= 0
+            && (wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN)
+            && super::LOCK_ACTIVE.load(Ordering::SeqCst)
+        {
             let info: &KBDLLHOOKSTRUCT = &*(lparam as *const KBDLLHOOKSTRUCT);
             let vk = info.vkCode;
             let alt = (info.flags & LLKHF_ALTDOWN) != 0;
@@ -203,15 +213,15 @@ fn keyboard_hook_thread() {
                 || alt && vk == VK_ESCAPE as u32               // Alt+Esc
                 || alt && vk == VK_F4 as u32                   // Alt+F4
                 || alt && vk == VK_SPACE as u32                // Alt+Space 系统菜单
-                || vk == VK_LWIN as u32                        // Win 键
-                || vk == VK_RWIN as u32                        // 右 Win 键
+                || vk == VK_LWIN as u32                        // Win 键（含 Win+Tab 切任务视图）
+                || vk == VK_RWIN as u32
                 || ctrl && shift && vk == VK_ESCAPE as u32     // Ctrl+Shift+Esc 任务管理器
                 || ctrl && vk == VK_ESCAPE as u32              // Ctrl+Esc 开始菜单
                 || vk == VK_F11 as u32;                        // F11 切全屏
 
             if blocked {
                 log(&format!("blocked hotkey vkCode=0x{vk:x}"));
-                return 1; // 吞掉按键
+                return 1;
             }
         }
         CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
@@ -237,6 +247,123 @@ fn keyboard_hook_thread() {
     }
 }
 
+// ---------------- 触控板三指/四指手势 ----------------
+
+mod gestures {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    use windows_sys::core::PCWSTR;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegCreateKeyW, RegDeleteValueW, RegQueryValueExW, RegSetValueExW, HKEY,
+        HKEY_CURRENT_USER, REG_DWORD,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+    };
+
+    const KEY_PATH: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\PrecisionTouchPad";
+    const VALUES: [&str; 2] = ["ThreeFingerSlideEnabled", "FourFingerSlideEnabled"];
+
+    /// 保存进入考试前的原始值，退出考试时恢复；None 表示原本不存在
+    static SAVED: Mutex<Option<HashMap<String, Option<u32>>>> = Mutex::new(None);
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn open_key() -> Option<HKEY> {
+        let path = wide(KEY_PATH);
+        let mut key: HKEY = std::ptr::null_mut();
+        let code = unsafe { RegCreateKeyW(HKEY_CURRENT_USER, path.as_ptr(), &mut key) };
+        if code == 0 { Some(key) } else { None }
+    }
+
+    fn read_dword(key: HKEY, name: &str) -> Option<u32> {
+        let n = wide(name);
+        let mut data = [0u8; 4];
+        let mut len = 4u32;
+        let code = unsafe {
+            RegQueryValueExW(
+                key,
+                n.as_ptr() as PCWSTR,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                data.as_mut_ptr(),
+                &mut len,
+            )
+        };
+        if code == 0 && len == 4 {
+            Some(u32::from_ne_bytes(data))
+        } else {
+            None
+        }
+    }
+
+    fn write_dword(key: HKEY, name: PCWSTR, value: u32) {
+        unsafe {
+            RegSetValueExW(
+                key,
+                name,
+                0,
+                REG_DWORD,
+                &value as *const u32 as *const u8,
+                4,
+            );
+        }
+    }
+
+    fn broadcast() {
+        let section = wide("PrecisionTouchPad");
+        unsafe {
+            SendMessageTimeoutW(
+                HWND_BROADCAST,
+                WM_SETTINGCHANGE,
+                0,
+                section.as_ptr() as isize,
+                SMTO_ABORTIFHUNG,
+                1000,
+                std::ptr::null_mut(),
+            );
+        }
+    }
+
+    pub fn disable() {
+        let Some(key) = open_key() else { return };
+        let mut saved = HashMap::new();
+        for name in VALUES {
+            let n = wide(name);
+            saved.insert(name.to_string(), read_dword(key, name));
+            write_dword(key, n.as_ptr() as PCWSTR, 0);
+        }
+        unsafe { RegCloseKey(key) };
+        let mut guard = SAVED.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(saved);
+        drop(guard);
+        broadcast();
+    }
+
+    pub fn restore() {
+        let saved = SAVED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let Some(saved) = saved else { return };
+        let Some(key) = open_key() else { return };
+        for (name, old) in saved {
+            let n = wide(&name);
+            match old {
+                Some(value) => write_dword(key, n.as_ptr() as PCWSTR, value),
+                None => {
+                    unsafe { RegDeleteValueW(key, n.as_ptr() as PCWSTR) };
+                }
+            }
+        }
+        unsafe { RegCloseKey(key) };
+        broadcast();
+    }
+}
+
 // ---------------- 进程监控 ----------------
 
 static REPORTED: std::sync::LazyLock<Mutex<HashSet<String>>> =
@@ -255,6 +382,10 @@ fn kill_matched(sys: &sysinfo::System, patterns: &[&str]) {
 fn process_watcher() {
     let mut sys = sysinfo::System::new_all();
     loop {
+        thread::sleep(Duration::from_secs(2));
+        if !super::LOCK_ACTIVE.load(Ordering::SeqCst) {
+            break;
+        }
         sys.refresh_processes();
 
         for (pid, process) in sys.processes() {
@@ -272,7 +403,6 @@ fn process_watcher() {
             };
 
             if let Some((cat, _patterns, auto_kill)) = category {
-                // 同一进程名只告警一次，避免刷日志
                 let should_report = REPORTED
                     .lock()
                     .map(|mut set| set.insert(name.clone()))
@@ -281,14 +411,11 @@ fn process_watcher() {
                 if should_report {
                     log(&format!("DETECTED {cat} process: {name} (pid {pid})"));
                 }
-
                 if auto_kill {
                     log(&format!("killing {cat} process: {name} (pid {pid})"));
                     let _ = process.kill();
                 }
             }
         }
-
-        thread::sleep(Duration::from_secs(2));
     }
 }

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>山西省电力仿真考试客户端</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: #f2f6f5;
+      color: #1f3a35;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      user-select: none;
+    }
+    .shell {
+      width: 860px;
+      background: #fff;
+      border: 1px solid #dce7e3;
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 10px 36px rgba(15, 78, 64, 0.08);
+    }
+    .hero {
+      background: #0f6e56;
+      color: #fff;
+      padding: 30px 36px 26px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .hero-mark {
+      width: 46px;
+      height: 46px;
+      border: 1px solid rgba(255,255,255,0.55);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+    }
+    .hero h1 { font-size: 21px; font-weight: 500; letter-spacing: 1px; }
+    .hero p { font-size: 12px; opacity: 0.82; margin-top: 7px; }
+    .body { padding: 28px 36px 32px; }
+    .section-title {
+      font-size: 13px;
+      color: #0f6e56;
+      font-weight: 500;
+      border-left: 3px solid #169e8c;
+      padding-left: 9px;
+      margin-bottom: 14px;
+    }
+    ol { padding-left: 20px; }
+    li { font-size: 13px; line-height: 1.9; color: #435c56; }
+    li::marker { color: #169e8c; font-weight: 500; }
+    .notice {
+      margin-top: 22px;
+      padding: 14px 16px;
+      border-radius: 8px;
+      background: #f0f7f4;
+      border: 1px solid #d7e9e2;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 50px;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #169e8c; flex: none; }
+    .dot.bad { background: #d64541; }
+    #status-text { font-size: 13px; color: #356157; line-height: 1.5; }
+    #status-text.bad { color: #b3332f; }
+    .actions { display: flex; gap: 12px; margin-top: 26px; }
+    button {
+      height: 44px;
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      font-family: inherit;
+    }
+    .primary { flex: 1; background: #169e8c; color: #fff; }
+    .primary:hover:not(:disabled) { background: #128672; }
+    .primary:disabled { background: #b8cbc5; cursor: not-allowed; }
+    .ghost { width: 130px; background: #fff; color: #536b65; border-color: #cbd9d4; }
+    .ghost:hover { background: #f6faf8; }
+    #error { margin-top: 12px; font-size: 12px; color: #d64541; min-height: 16px; }
+    .foot { margin-top: 18px; font-size: 11px; color: #9aaba6; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="hero">
+      <div class="hero-mark">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5">
+          <path d="M4 6.5 12 3l8 3.5v11L12 21l-8-3.5z"/>
+          <path d="M8.5 12.2l2.4 2.4 4.8-5"/>
+        </svg>
+      </div>
+      <div>
+        <h1>山西省电力仿真考试客户端</h1>
+        <p>进入考试后系统将全屏锁定，请按以下注意事项准备</p>
+      </div>
+    </div>
+    <div class="body">
+      <div class="section-title">考试注意事项</div>
+      <ol>
+        <li>请关闭 ToDesk、向日葵、TeamViewer、AnyDesk 等远程控制软件后再进入考试。</li>
+        <li>考试期间系统将全屏霸屏，禁止切换窗口、切换桌面及调用任务管理器。</li>
+        <li>请使用本机主屏幕操作；如连接了额外显示器，副屏将被锁定显示提示页面。</li>
+        <li>请保持电源与网络连接稳定，考试过程中的操作记录将自动保存。</li>
+        <li>退出考试需二次确认，退出后当前操作成绩将上传后台且不可更改。</li>
+      </ol>
+      <div class="notice">
+        <span class="dot" id="status-dot"></span>
+        <span id="status-text">正在检测运行环境…</span>
+      </div>
+      <div class="actions">
+        <button class="primary" id="enter" disabled>进入考试</button>
+        <button class="ghost" id="quit">退出</button>
+      </div>
+      <div id="error"></div>
+      <div class="foot">山西省电力仿真考试客户端 · 考试专用环境</div>
+    </div>
+  </div>
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const enterBtn = document.getElementById('enter');
+    const statusText = document.getElementById('status-text');
+    const statusDot = document.getElementById('status-dot');
+    const errorBox = document.getElementById('error');
+
+    function setEnterEnabled(enabled) {
+      enterBtn.disabled = !enabled;
+      if (enabled) {
+        enterBtn.removeAttribute('disabled');
+        enterBtn.style.backgroundColor = '#169e8c';
+        enterBtn.style.cursor = 'pointer';
+      } else {
+        enterBtn.setAttribute('disabled', '');
+        enterBtn.style.backgroundColor = '';
+        enterBtn.style.cursor = 'not-allowed';
+      }
+    }
+
+    let pollSeq = 0;
+    async function refreshStatus() {
+      const seq = ++pollSeq;
+      try {
+        const result = await invoke('check_remote_software');
+        if (seq !== pollSeq) return;
+        if (result.blocked) {
+          setEnterEnabled(false);
+          statusText.textContent = '请关闭远程软件' + (result.apps.length ? '：' + result.apps.join('、') : '');
+          statusText.classList.add('bad');
+          statusDot.classList.add('bad');
+        } else {
+          setEnterEnabled(true);
+          statusText.textContent = '环境检测通过，可以进入考试';
+          statusText.classList.remove('bad');
+          statusDot.classList.remove('bad');
+        }
+      } catch (e) {
+        if (seq !== pollSeq) return;
+        setEnterEnabled(false);
+        statusText.textContent = '环境检测失败，请重新启动客户端';
+        statusText.classList.add('bad');
+        statusDot.classList.add('bad');
+      }
+    }
+
+    refreshStatus();
+    setInterval(refreshStatus, 800);
+
+    enterBtn.addEventListener('click', async () => {
+      setEnterEnabled(false);
+      errorBox.textContent = '';
+      try {
+        await invoke('enter_exam');
+      } catch (e) {
+        errorBox.textContent = typeof e === 'string' ? e : '进入考试失败，请重试';
+        refreshStatus();
+      }
+    });
+
+    document.getElementById('quit').addEventListener('click', () => invoke('exit_app'));
+  </script>
+</body>
+</html>

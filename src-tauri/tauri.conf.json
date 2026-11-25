@@ -11,14 +11,14 @@
     "windows": [
       {
         "label": "main",
-        "title": "Elecbalance Kiosk",
-        "url": "https://sim.elecbalance.com/login",
-        "width": 1366,
-        "height": 800,
-        "decorations": false,
+        "title": "山西省电力仿真考试客户端",
+        "url": "guide.html",
+        "width": 960,
+        "height": 660,
+        "decorations": true,
         "fullscreen": false,
         "resizable": false,
-        "visible": false
+        "visible": true
       }
     ],
     "security": {

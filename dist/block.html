@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>考试进行中</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: #0d332c;
+      color: #e8f5f0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+    }
+    .lock {
+      width: 92px;
+      height: 92px;
+      border: 1px solid rgba(255,255,255,0.28);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 28px;
+    }
+    h1 { font-size: 26px; font-weight: 500; letter-spacing: 1px; }
+    p { margin-top: 14px; font-size: 15px; color: #9dc7ba; }
+    .line { width: 56px; height: 2px; background: #169e8c; margin-top: 26px; }
+  </style>
+</head>
+<body>
+  <div class="lock">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e8f5f0" stroke-width="1.4">
+      <rect x="4" y="10" width="16" height="11" rx="2"/>
+      <path d="M8 10V7a4 4 0 0 1 8 0v3"/>
+      <circle cx="12" cy="15.5" r="1"/>
+    </svg>
+  </div>
+  <h1>正在考试中</h1>
+  <p>请在本机屏幕操作</p>
+  <div class="line"></div>
+</body>
+</html>

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>退出考试确认</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: #f4f7f6;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+    }
+    .card {
+      width: 380px;
+      background: #fff;
+      border: 1px solid #dce7e3;
+      border-radius: 12px;
+      padding: 26px 26px 22px;
+      box-shadow: 0 8px 28px rgba(15, 78, 64, 0.12);
+    }
+    h2 { font-size: 16px; font-weight: 500; color: #0f6e56; margin-bottom: 16px; }
+    p { font-size: 13px; line-height: 1.8; color: #435c56; margin-bottom: 22px; }
+    .btns { display: flex; gap: 10px; }
+    button {
+      flex: 1;
+      height: 40px;
+      border: none;
+      border-radius: 7px;
+      font-size: 13px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .cancel { background: #e8edeb; color: #45524d; }
+    .ok { background: #169e8c; color: #fff; }
+    .cancel:hover { background: #dce6e2; }
+    .ok:hover { background: #128672; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>温馨提示</h2>
+    <p>退出考试后，当前操作成绩将上传后台且不可更改，您是否确定退出？</p>
+    <div class="btns">
+      <button class="cancel" id="cancel">取消</button>
+      <button class="ok" id="ok">确定退出</button>
+    </div>
+  </div>
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    document.getElementById('cancel').addEventListener('click', () => invoke('cancel_exit_exam'));
+    document.getElementById('ok').addEventListener('click', async () => {
+      const btn = document.getElementById('ok');
+      btn.disabled = true;
+      await invoke('confirm_exit_exam');
+    });
+  </script>
+</body>
+</html>

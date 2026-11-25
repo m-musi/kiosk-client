@@ -2118,6 +2118,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "url",
  "windows-sys 0.59.0",
 ]
 
