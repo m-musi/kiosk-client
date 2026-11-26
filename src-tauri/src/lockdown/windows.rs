@@ -63,6 +63,7 @@ pub fn activate(window: &WebviewWindow) {
     super::LOCK_ACTIVE.store(true, Ordering::SeqCst);
     precheck_and_log();
     gestures::disable();
+    policies::disable();
 
     let hwnd = window.hwnd().map(|h| h.0 as isize).unwrap_or(0);
     if hwnd != 0 {
@@ -80,6 +81,7 @@ pub fn activate(window: &WebviewWindow) {
 pub fn deactivate(_window: &WebviewWindow) {
     super::LOCK_ACTIVE.store(false, Ordering::SeqCst);
     gestures::restore();
+    policies::restore();
     log("kiosk deactivated, returned to guide");
 }
 
@@ -119,16 +121,64 @@ fn focus_guardian(hwnd: isize) {
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, VK_MENU, KEYEVENTF_KEYUP};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, GetForegroundWindow, GetWindowThreadProcessId, IsIconic, SetForegroundWindow,
-        SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-        SW_SHOWMAXIMIZED,
+        FindWindowW, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
+        IsIconic, SetForegroundWindow, SetWindowPos, ShowWindow, GWL_EXSTYLE, GW_HWNDPREV,
+        HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOWMAXIMIZED, WS_EX_TOPMOST,
     };
 
+    /// 窗口是否处于 TOPMOST 层级（已是则不重复 SetWindowPos，避免无谓重绘）。
+    unsafe fn is_topmost(h: HWND) -> bool {
+        (GetWindowLongPtrW(h, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST) != 0
+    }
+
+    /// a 是否在 b 之上（Z 序更高）。
+    unsafe fn is_above(a: HWND, b: HWND) -> bool {
+        let mut w = GetWindow(b, GW_HWNDPREV);
+        while !w.is_null() {
+            if w == a {
+                return true;
+            }
+            w = GetWindow(w, GW_HWNDPREV);
+        }
+        false
+    }
+
+    /// 把悬浮按钮 / 确认窗保证在考试窗之上。仅当确实被压住时才重排，
+    /// 稳态下完全不调用 SetWindowPos，避免 150ms 周期重绘造成闪烁。
+    unsafe fn raise_fabs_above(target_h: HWND) {
+        for title in ["退出考试", "退出考试确认"] {
+            let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+            let w = FindWindowW(std::ptr::null(), wide.as_ptr());
+            if w.is_null() {
+                continue;
+            }
+            if !is_topmost(w) || !is_above(w, target_h) {
+                SetWindowPos(
+                    w,
+                    HWND_TOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
+        }
+    }
+
     let target = hwnd as isize;
+    let mut ticks: u32 = 0;
     loop {
-        thread::sleep(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(150));
         if !super::LOCK_ACTIVE.load(Ordering::SeqCst) {
             break;
+        }
+        // 每 20 次循环（约 3 秒）校验一次策略注册表与触控板手势：
+        // 防止系统或用户在考试期间重置这些限制。
+        ticks = ticks.wrapping_add(1);
+        if ticks % 20 == 0 {
+            policies::ensure();
+            gestures::ensure();
         }
         unsafe {
             let target_h: HWND = target as *mut core::ffi::c_void;
@@ -147,32 +197,21 @@ fn focus_guardian(hwnd: isize) {
                 let _ = SetForegroundWindow(target_h);
                 keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
             }
-            // 每个周期都重钉：考试窗 TOPMOST，悬浮退出按钮与退出确认窗必须在其之上。
-            // （activate 在悬浮窗创建后再次置顶考试窗会把悬浮窗压下去，必须持续补钉）
-            SetWindowPos(
-                target_h,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-            );
-            for title in ["退出考试", "退出考试确认"] {
-                let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
-                let w = FindWindowW(std::ptr::null(), wide.as_ptr());
-                if !w.is_null() {
-                    SetWindowPos(
-                        w,
-                        HWND_TOPMOST,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-                    );
-                }
+            // 考试窗仅在丢失 TOPMOST 时补设，平时不碰它（避免每 150ms 重绘闪烁）。
+            if !is_topmost(target_h) {
+                SetWindowPos(
+                    target_h,
+                    HWND_TOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+                raise_fabs_above(target_h);
             }
+            // 悬浮按钮/确认窗被点击考试页或其他窗口压住时，才重排到最上。
+            raise_fabs_above(target_h);
         }
     }
 }
@@ -210,12 +249,12 @@ fn keyboard_hook_thread() {
             let ctrl = (GetAsyncKeyState(VK_CONTROL as i32) as u16 & 0x8000) != 0;
             let shift = (GetAsyncKeyState(VK_SHIFT as i32) as u16 & 0x8000) != 0;
 
-            let blocked = alt && vk == VK_TAB as u32           // Alt+Tab
-                || alt && vk == VK_ESCAPE as u32               // Alt+Esc
+            let blocked = alt && vk == VK_ESCAPE as u32               // Alt+Esc
                 || alt && vk == VK_F4 as u32                   // Alt+F4
                 || alt && vk == VK_SPACE as u32                // Alt+Space 系统菜单
-                || vk == VK_LWIN as u32                        // Win 键（含 Win+Tab 切任务视图）
+                || vk == VK_LWIN as u32                        // Win 键（含 Win+Tab/Win+D/Win+Ctrl+方向键切桌面）
                 || vk == VK_RWIN as u32
+                || vk == VK_TAB as u32                         // Tab 全拦：防 Alt+Tab/Ctrl+Tab 等变体（考试页无输入场景）
                 || ctrl && shift && vk == VK_ESCAPE as u32     // Ctrl+Shift+Esc 任务管理器
                 || ctrl && vk == VK_ESCAPE as u32              // Ctrl+Esc 开始菜单
                 || vk == VK_F11 as u32;                        // F11 切全屏
@@ -253,6 +292,8 @@ fn keyboard_hook_thread() {
 mod gestures {
     use std::collections::HashMap;
     use std::sync::Mutex;
+
+    use super::log;
 
     use windows_sys::core::PCWSTR;
     use windows_sys::Win32::System::Registry::{
@@ -344,6 +385,30 @@ mod gestures {
         broadcast();
     }
 
+    /// 守护校验：手势值被系统重置则强制拉回 0
+    pub fn ensure() {
+        {
+            let guard = SAVED.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.is_none() {
+                return;
+            }
+        }
+        let Some(key) = open_key() else { return };
+        let mut changed = false;
+        for name in VALUES {
+            if read_dword(key, name) != Some(0) {
+                let n = wide(name);
+                write_dword(key, n.as_ptr() as PCWSTR, 0);
+                changed = true;
+            }
+        }
+        unsafe { RegCloseKey(key) };
+        if changed {
+            broadcast();
+            log("gestures: re-forced touchpad slides off");
+        }
+    }
+
     pub fn restore() {
         let saved = SAVED
             .lock()
@@ -365,6 +430,125 @@ mod gestures {
     }
 }
 
+// ---------------- 组策略级禁用（注册表 Policies） ----------------
+
+/// 任务管理器（含 Ctrl+Alt+Del 菜单入口）与 Win 热键的组策略级禁用。
+/// 低级键盘钩子拦不住 Ctrl+Alt+Del（SAS 系统序列），只能靠策略键。
+mod policies {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    use super::log;
+
+    use windows_sys::core::PCWSTR;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegCreateKeyW, RegDeleteValueW, RegQueryValueExW, RegSetValueExW, HKEY,
+        HKEY_CURRENT_USER, REG_DWORD,
+    };
+
+    const KEY_PATH: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System";
+    const VALUES: [&str; 2] = ["DisableTaskMgr", "NoWinKeys"];
+
+    static SAVED: Mutex<Option<HashMap<String, Option<u32>>>> = Mutex::new(None);
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn open_key() -> Option<HKEY> {
+        let path = wide(KEY_PATH);
+        let mut key: HKEY = std::ptr::null_mut();
+        let code = unsafe { RegCreateKeyW(HKEY_CURRENT_USER, path.as_ptr(), &mut key) };
+        if code == 0 { Some(key) } else { None }
+    }
+
+    fn read_dword(key: HKEY, name: &str) -> Option<u32> {
+        let n = wide(name);
+        let mut data = [0u8; 4];
+        let mut len = 4u32;
+        let code = unsafe {
+            RegQueryValueExW(
+                key,
+                n.as_ptr() as PCWSTR,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                data.as_mut_ptr(),
+                &mut len,
+            )
+        };
+        if code == 0 && len == 4 {
+            Some(u32::from_ne_bytes(data))
+        } else {
+            None
+        }
+    }
+
+    fn write_dword(key: HKEY, name: PCWSTR, value: u32) {
+        unsafe {
+            RegSetValueExW(
+                key,
+                name,
+                0,
+                REG_DWORD,
+                &value as *const u32 as *const u8,
+                4,
+            );
+        }
+    }
+
+    pub fn disable() {
+        let Some(key) = open_key() else { return };
+        let mut saved = HashMap::new();
+        for name in VALUES {
+            let n = wide(name);
+            saved.insert(name.to_string(), read_dword(key, name));
+            write_dword(key, n.as_ptr() as PCWSTR, 1);
+        }
+        unsafe { RegCloseKey(key) };
+        let mut guard = SAVED.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(saved);
+        log("policies: DisableTaskMgr/NoWinKeys enabled");
+    }
+
+    /// 守护校验：值被重置则强制拉回 1
+    pub fn ensure() {
+        let guard = SAVED.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() {
+            return;
+        }
+        drop(guard);
+        let Some(key) = open_key() else { return };
+        for name in VALUES {
+            if read_dword(key, name) != Some(1) {
+                let n = wide(name);
+                write_dword(key, n.as_ptr() as PCWSTR, 1);
+                log(&format!("policies: re-forced {} = 1", name));
+            }
+        }
+        unsafe { RegCloseKey(key) };
+    }
+
+    pub fn restore() {
+        let saved = SAVED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let Some(saved) = saved else { return };
+        let Some(key) = open_key() else { return };
+        for (name, old) in saved {
+            let n = wide(&name);
+            match old {
+                Some(value) => write_dword(key, n.as_ptr() as PCWSTR, value),
+                None => {
+                    unsafe { RegDeleteValueW(key, n.as_ptr() as PCWSTR) };
+                }
+            }
+        }
+        unsafe { RegCloseKey(key) };
+        log("policies: restored");
+    }
+}
+
 // ---------------- 进程监控 ----------------
 
 static REPORTED: std::sync::LazyLock<Mutex<HashSet<String>>> =
@@ -383,7 +567,8 @@ fn kill_matched(sys: &sysinfo::System, patterns: &[&str]) {
 fn process_watcher() {
     let mut sys = sysinfo::System::new_all();
     loop {
-        thread::sleep(Duration::from_secs(2));
+        // 1s 轮询：taskmgr.exe 强杀兜底需要尽快响应
+        thread::sleep(Duration::from_secs(1));
         if !super::LOCK_ACTIVE.load(Ordering::SeqCst) {
             break;
         }
@@ -394,6 +579,13 @@ fn process_watcher() {
                 continue;
             }
             let name = process.name().to_lowercase();
+
+            // 任务管理器兜底：即使通过 Ctrl+Alt+Del 菜单启动也立即强杀。
+            if name == "taskmgr.exe" {
+                log("killing taskmgr.exe");
+                let _ = process.kill();
+                continue;
+            }
 
             let category = if name_matches(&name, REMOTE_CONTROL_APPS) {
                 Some(("remote", REMOTE_CONTROL_APPS, AUTO_KILL_REMOTE))

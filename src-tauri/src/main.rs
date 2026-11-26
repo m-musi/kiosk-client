@@ -2,6 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod lockdown;
+#[cfg(target_os = "windows")]
+mod fab_win;
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -202,56 +204,61 @@ async fn enter_exam(app: tauri::AppHandle) -> Result<(), String> {
         ),
         None => (0, 0, 768, 1.0),
     };
-    // 坐标统一用物理像素：monitor 的 position/size 是物理像素，inner_size 传的却是逻辑像素。
-    // Retina(scale=2) 下 80 逻辑像素 = 160 物理像素，旧代码按 80 物理像素定位，
-    // 窗口底部溢出屏幕约 60px，按钮下半截被切掉。
     let margin = 20.0_f64; // 距屏幕左/下各 20 物理像素
-    let fab_size = 48.0_f64; // 窗口=按钮尺寸（纯图标圆形按钮），两者一致
-    let win_h_physical = fab_size * scale;
-    let fab_x = (px as f64 + margin).round() as i32;
-    let fab_y = ((py + ph) as f64 - margin - win_h_physical).round() as i32;
-    let fab_pos = tauri::PhysicalPosition::new(fab_x, fab_y);
-    let built = WebviewWindowBuilder::new(
-        &app,
-        "exam-fab",
-        WebviewUrl::App("exit-fab.html".into()),
-    )
-    .title("退出考试")
-    .decorations(false)
-    .resizable(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .transparent(true)
-    // 进入考试后 exam 窗口是 key window，fab 处于非活动态。
-    // macOS 默认会把非活动窗口的第一次点击用来激活窗口而不透传给 webview，
-    // 导致「第一次点没反应、要点第二次」。设为 true 让首次点击直达按钮。
-    .accept_first_mouse(true)
-    // 窗口=按钮尺寸，按钮在 HTML 里 width/height 100% 填满
-    .inner_size(fab_size, fab_size)
-    // builder 的 position 收逻辑像素；build 后再用 set_position 设物理像素精确覆盖
-    .position(fab_x as f64 / scale, fab_y as f64 / scale)
-    .build();
-    if let Ok(w) = built {
-        let _ = w.set_position(fab_pos);
-        // 透明无边框 + 非 key 窗口默认不接收 mouseMoved，导致 WKWebView 的
-        // CSS cursor:pointer 永远不触发，光标一直是箭头。打开这个开关让
-        // WebView 真正收到鼠标移动事件。
-        #[cfg(target_os = "macos")]
-        unsafe {
-            use objc2::msg_send;
-            use objc2::runtime::AnyObject;
-            if let Ok(ns_win) = w.ns_window() {
-                let ns_win = ns_win as *mut AnyObject;
-                let _: () = msg_send![ns_win, setAcceptsMouseMovedEvents: true];
-            }
-        }
-        // 第二重保险：设窗口级手型光标。不透明窗口下 cursor rect 能被正确应用。
-        let _ = w.set_cursor_icon(tauri::CursorIcon::Hand);
-        // 第三重：CSS cursor:pointer 已在 exit-fab.html 设好。
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows：原生分层窗口自绘抗锯齿圆按钮。窗口=按钮尺寸、逐像素透明，
+        // 不受 WebView2 最小窗口约束，也不会露出矩形底色块。
+        let side = (48.0_f64 * scale).round() as i32;
+        let fab_x = px + margin as i32;
+        let fab_y = py + ph - margin as i32 - side;
+        fab_win::create(app.clone(), fab_x, fab_y, side);
+        exam_log(&format!(
+            "native fab created pos=({fab_x},{fab_y}) side={side} scale={scale}"
+        ));
     }
-    exam_log(&format!(
-        "fab window done pos=({fab_x},{fab_y}) scale={scale}"
-    ));
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // macOS 基线：透明 WebView 窗口 + CSS 圆形按钮，一行未改。
+        let fab_size = 48.0_f64;
+        let win_h_physical = fab_size * scale;
+        let fab_x = (px as f64 + margin).round() as i32;
+        let fab_y = ((py + ph) as f64 - margin - win_h_physical).round() as i32;
+        let fab_pos = tauri::PhysicalPosition::new(fab_x, fab_y);
+        let built = WebviewWindowBuilder::new(
+            &app,
+            "exam-fab",
+            WebviewUrl::App("exit-fab.html".into()),
+        )
+        .title("退出考试")
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .transparent(true)
+        .accept_first_mouse(true)
+        .inner_size(fab_size, fab_size)
+        .position(fab_x as f64 / scale, fab_y as f64 / scale)
+        .build();
+        if let Ok(w) = built {
+            let _ = w.set_position(fab_pos);
+            #[cfg(target_os = "macos")]
+            unsafe {
+                use objc2::msg_send;
+                use objc2::runtime::AnyObject;
+                if let Ok(ns_win) = w.ns_window() {
+                    let ns_win = ns_win as *mut AnyObject;
+                    let _: () = msg_send![ns_win, setAcceptsMouseMovedEvents: true];
+                }
+            }
+            let _ = w.set_cursor_icon(tauri::CursorIcon::Hand);
+        }
+        exam_log(&format!(
+            "fab window done pos=({fab_x},{fab_y}) scale={scale}"
+        ));
+    }
 
     if let Some(guide) = app.get_webview_window("main") {
         let _ = guide.hide();
@@ -266,9 +273,8 @@ async fn enter_exam(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 悬浮按钮点击：打开退出二次确认窗（async 同上，避免主线程死锁）
-#[tauri::command]
-async fn show_exit_confirm(app: tauri::AppHandle) {
+/// 打开退出二次确认窗（async 同上，避免主线程死锁）
+pub(crate) async fn open_exit_confirm(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("exit-confirm") {
         // 复用已创建的窗口。取消时只是 hide，必须显式 show 才会重新显示；
         // 早期版本只调 set_focus 就 return，隐藏态窗口不会重现，表现为「点了没反应」。
@@ -301,6 +307,11 @@ async fn show_exit_confirm(app: tauri::AppHandle) {
     }
 }
 
+#[tauri::command]
+async fn show_exit_confirm(app: tauri::AppHandle) {
+    open_exit_confirm(app).await;
+}
+
 /// 取消退出：隐藏确认窗（不销毁），焦点还给考试窗口。
 /// 不能改用 close()：close 是异步销毁，紧接着再点悬浮按钮时会命中「正在关闭」的
 /// 句柄，show_exit_confirm 只 set_focus 不 show 也不重建，导致按钮失灵。
@@ -321,6 +332,11 @@ fn confirm_exit_exam(app: tauri::AppHandle) {
     if let Some(exam) = app.get_webview_window("exam") {
         lockdown::deactivate(&exam);
     }
+
+    // Windows 的悬浮按钮是原生分层窗口（不在 Tauri 窗口表里），必须显式销毁，
+    // 否则退出考试后按钮会残留在屏幕上。
+    #[cfg(target_os = "windows")]
+    fab_win::destroy();
 
     let labels: Vec<String> = app
         .webview_windows()
