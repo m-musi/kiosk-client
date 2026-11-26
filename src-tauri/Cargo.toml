@@ -8,7 +8,7 @@ description = "Kiosk 霸屏客户端：内嵌指定网址，锁定屏幕，检�
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"

@@ -26,7 +26,9 @@ if "%CONF%"=="" (
 REM Updater signing key (unencrypted). Generate once with:
 REM   cargo tauri signer generate -w .keys/kiosk.key --ci
 if exist .keys\kiosk.key (
-  set "TAURI_SIGNING_PRIVATE_KEY=.keys\kiosk.key"
+  REM .keys\kiosk.key is a SINGLE-LINE base64 of the minisign secret key.
+  REM Tauri v2 base64-decodes TAURI_SIGNING_PRIVATE_KEY, so pass the whole line.
+  for /f "delims=" %%A in (.keys\kiosk.key) do set "TAURI_SIGNING_PRIVATE_KEY=%%A"
   set "TAURI_SIGNING_PRIVATE_KEY_PASSWORD="
 ) else (
   echo [warn] .keys\kiosk.key not found, updater artifacts will fail.

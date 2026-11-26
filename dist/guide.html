@@ -5,24 +5,23 @@
   <title>山西省电力仿真考试客户端</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: transparent;
+      overflow: hidden;
+    }
     body {
       font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-      background: #f2f6f5;
       color: #1f3a35;
       min-height: 100vh;
       display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
+      align-items: flex-start;
+      justify-content: flex-start;
       user-select: none;
     }
     .shell {
-      width: 860px;
+      width: 100%;
       background: #fff;
-      border: 1px solid #dce7e3;
-      border-radius: 14px;
       overflow: hidden;
-      box-shadow: 0 10px 36px rgba(15, 78, 64, 0.08);
     }
     .hero {
       background: #0f6e56;
@@ -90,7 +89,7 @@
   </style>
 </head>
 <body>
-  <div id="env-badge" style="display:none; position:fixed; top:10px; right:12px; z-index:999; background:#f59e0b; color:#fff; font-size:12px; font-weight:600; padding:4px 12px; border-radius:999px; letter-spacing:1px; user-select:none;"></div>
+  <div id="env-badge" style="display:none; position:fixed; top:10px; right:12px; z-index:999; background:#f59e0b; color:#fff; font-size:12px; font-weight:600; padding:4px 12px; border-radius:999px; letter-spacing:1px; user-select:none; pointer-events:none;"></div>
   <div class="shell">
     <div class="hero">
       <div class="hero-mark">
@@ -127,6 +126,24 @@
   </div>
   <script>
     const { invoke } = window.__TAURI__.core;
+    const { getCurrentWindow, LogicalSize } = window.__TAURI__.window;
+
+    // 窗口尺寸自适应卡片实际高度（Windows/Mac 字体高度不同，动态校准）
+    function fitWindow() {
+      const rect = document.querySelector('.shell').getBoundingClientRect();
+      const w = Math.ceil(rect.width);
+      const h = Math.ceil(rect.height);
+      getCurrentWindow().setSize(new LogicalSize(w, h));
+    }
+    window.addEventListener('load', () => setTimeout(fitWindow, 80));
+
+    // 任意位置按下拖动即可移动窗口（按钮除外）
+    document.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest('button')) return;
+      getCurrentWindow().startDragging();
+    });
+
     // 环境标识：dev/test 显示醒目角标，prod 不显示
     invoke('get_app_env').then((env) => {
       if (env && env !== 'prod') {

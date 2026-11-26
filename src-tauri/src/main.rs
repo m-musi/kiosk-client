@@ -12,9 +12,12 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 fn check_for_updates(app: &tauri::AppHandle) {
     // 当前为免签名内部包：更新服务器不可达时会长时间阻塞，直接跳过。
     if !lockdown::UPDATER_ENABLED {
+        updater_log("updater disabled by KIOSK_UPDATER, skip");
         return;
     }
     use tauri_plugin_updater::UpdaterExt;
+
+    updater_log(&format!("check start, app version={}", app.package_info().version));
 
     let result = tauri::async_runtime::block_on(async {
         let updater = match app.updater_builder().build() {
@@ -22,29 +25,49 @@ fn check_for_updates(app: &tauri::AppHandle) {
             Err(e) => return Err(format!("updater not configured: {e}")),
         };
         let update = match updater.check().await {
-            Ok(Some(u)) => u,
-            Ok(None) => return Ok(()),
-            Err(e) => return Err(e.to_string()),
+            Ok(Some(u)) => {
+                updater_log(&format!("update available: {}", u.version));
+                u
+            }
+            Ok(None) => {
+                updater_log("no update available");
+                return Ok(());
+            }
+            Err(e) => return Err(format!("check failed: {e}")),
         };
-        eprintln!("发现新版本 {}，开始下载...", update.version);
+        updater_log("start download...");
         if let Err(e) = update
             .download_and_install(
                 |chunk, total| match total {
-                    Some(t) => eprintln!("下载中 {chunk}/{t}"),
-                    None => eprintln!("下载中 {chunk}"),
+                    Some(t) => updater_log(&format!("download {chunk}/{t}")),
+                    None => updater_log(&format!("download {chunk}")),
                 },
-                || eprintln!("下载完成，开始安装..."),
+                || updater_log("download done, installing..."),
             )
             .await
         {
-            return Err(e.to_string());
+            return Err(format!("install failed: {e}"));
         }
-        eprintln!("更新完成，正在重启...");
+        updater_log("update installed, restarting...");
         app.restart();
     });
 
     if let Err(e) = result {
-        eprintln!("自动更新检查失败（忽略，继续正常启动）: {e}");
+        updater_log(&format!("update aborted: {e}"));
+    }
+}
+
+/// 更新流程日志（release 无控制台，落盘到临时目录便于排查）
+fn updater_log(msg: &str) {
+    use std::io::Write;
+    let line = format!("[{}] [updater] {msg}\n", chrono_like_stamp());
+    eprintln!("{}", line.trim_end());
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("elecbalance-updater.log"))
+    {
+        let _ = f.write_all(line.as_bytes());
     }
 }
 

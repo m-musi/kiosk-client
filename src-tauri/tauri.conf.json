@@ -1,21 +1,23 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Elecbalance Kiosk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.elecbalance.kiosk",
   "build": {
     "frontendDist": "../dist"
   },
   "app": {
     "withGlobalTauri": true,
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
         "title": "山西省电力仿真考试客户端",
         "url": "guide.html",
-        "width": 960,
-        "height": 660,
-        "decorations": true,
+        "width": 860,
+        "height": 520,
+        "decorations": false,
+        "transparent": true,
         "fullscreen": false,
         "resizable": false,
         "center": true,
@@ -28,7 +30,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
+    "targets": "all",
     "icon": [
       "icons/icon.ico",
       "icons/icon.png",
@@ -41,7 +43,7 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": ["https://updates.elecbalance.com/kiosk/latest.json"],
+      "endpoints": ["https://file.mengjia.site/kiosk/latest.json"],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJEMTIyNEY1MjA0RDZCODMKUldTRGEwMGc5U1FTTGU1blFxcVB0eCtKTTNuc1o3Zll5OTJpWkIvU1Q3R1JLRFlLMlQ5SURER2cK"
     }
   }
