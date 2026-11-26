@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Elecbalance Kiosk Test",
+  "identifier": "com.elecbalance.kiosk.test",
+  "bundle": {
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://updates.elecbalance.com/kiosk-test/latest.json"],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJEMTIyNEY1MjA0RDZCODMKUldTRGEwMGc5U1FTTGU1blFxcVB0eCtKTTNuc1o3Zll5OTJpWkIvU1Q3R1JLRFlLMlQ5SURER2cK"
+    }
+  }
+}

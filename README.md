@@ -47,6 +47,25 @@ cargo tauri build
 # 产物在 src-tauri/target/release/ 与 src-tauri/target/release/bundle/
 ```
 
+### 分环境打包（dev / test / prod）
+
+三个环境在**编译期**切换内嵌考试地址与更新端点，通过 `scripts\build.cmd` 打包：
+
+| 环境 | 命令 | 内嵌考试地址 | 安装包标识 |
+|------|------|-------------|-----------|
+| 本地开发 | `scripts\build.cmd dev` | `http://dev.internal.elecbalance.com/login` | `com.elecbalance.kiosk.dev` |
+| 测试环境 | `scripts\build.cmd test` | `http://test.internal.elecbalance.com/login` | `com.elecbalance.kiosk.test` |
+| 生产环境 | `scripts\build.cmd prod`（或不带参数） | `https://sim.elecbalance.com/login` | `com.elecbalance.kiosk` |
+
+- dev/test 包用不同的 identifier 与产品名（Elecbalance Kiosk Dev/Test），
+  可与生产版**并存安装**，互不影响
+- dev/test 包引导页右上角有醒目的橙色环境角标，窗口标题也带环境后缀
+- 需要临时覆盖考试地址时，可设 `KIOSK_EXAM_URL=<url>` 打包（优先级最高）
+- 原理：编译期环境变量（`KIOSK_ENV` 等）+ `--config` 合并 `src-tauri/tauri.<env>.conf.json`，
+  配置项见 `lockdown/mod.rs` 的「分环境配置」段；`build.rs` 已声明环境变量依赖，
+  切换环境后会自动重新编译
+- macOS 打包同样用 `KIOSK_ENV=<env> cargo tauri build --config src-tauri/tauri.<env>.conf.json`
+
 ### macOS 构建
 
 macOS 包只能在 Mac 系统上产出（Apple SDK 限制，Windows 无法交叉编译）；同理 Windows 的
@@ -135,60 +154,59 @@ Control+Option+Shift+Q），弹出置顶口令输入窗：
 
 ## 自动更新（tauri-plugin-updater）
 
-启动流程：显示引导页 → **检查更新（有新版则下载安装并自动重启）** → 考生点「进入考试」
+启动流程：显示引导页 → **后台线程检查更新（有新版则下载安装并自动重启）** → 考生点「进入考试」
 → 远控复核 → 打开考试窗口 + 副屏遮挡 + 悬浮退出按钮 → 全屏霸屏。
-未配置密钥/更新服务器时自动跳过（日志提示），不影响正常启动。
+检查在后台线程执行且更新服务器不可达时静默跳过，不影响正常启动。
 
-> **当前状态：关闭签名产物与更新检查**（`createUpdaterArtifacts: false`、
-> `lockdown::UPDATER_ENABLED = false`）。此前在启动 `setup` 中同步检查更新，
-> 更新服务器不可达时会导致窗口一直不显示；现已跳过检查，且检查逻辑改在后台线程执行，
-> 不会再阻塞引导页。日后要启用时按下方步骤操作，并把 `UPDATER_ENABLED` 改为 `true`。
+> **当前状态：已启用**。签名密钥对已生成在 `.keys/`（已被 gitignore，**私钥务必备份**），
+> 公钥已写入 `tauri.conf.json` 与三个环境配置；`UPDATER_ENABLED` 默认开启
+> （打包时设 `KIOSK_UPDATER=0` 可关闭）。更新端点按环境隔离：
+> `/kiosk/latest.json`（prod）、`/kiosk-test/latest.json`（test）、`/kiosk-dev/latest.json`（dev）。
 
-### 内部使用（无签名，当前模式）
+### 更新分发流程
 
-- **Windows**：直接 `cargo tauri build` 出 NSIS 安装包。因未做代码签名，
-  首次运行可能触发 SmartScreen 提示，点「更多信息 → 仍要运行」即可；
-  也可右键 exe → 属性 → 勾选「解除锁定」。
-- **macOS**：在 Mac 上 `cargo tauri build --bundles dmg`。未签名包首次打开会被
-  Gatekeeper 拦，处理方式任选：
-  - 右键 App →「打开」（弹窗中再点打开）
-  - 或终端去掉隔离标记：`xattr -d com.apple.quarantine "/Applications/Elecbalance Kiosk.app"`
-  - 或临时自签：`codesign --force --deep -s - "Elecbalance Kiosk.app"`
-- **更新分发**：内部场景最简单的做法是把新版安装包放到内网文件服务器/网盘，
-  通知用户自行覆盖安装；正式启用自动更新见下节。
-
-### 启用自动更新（需要签名时再开）
-
-1. **生成签名密钥对**（一次性）：
+1. **构建带更新签名的安装包**（`createUpdaterArtifacts` 已在环境配置中开启）：
 
 ```bash
-cargo tauri signer generate -w ~/.tauri/kiosk.key
+scripts\build.cmd prod        # 或 test / dev
+# 产物：src-tauri/target/release/bundle/ 下的安装包 + *.sig 签名文件
 ```
 
-2. **写入公钥**：把生成的公钥填入 `src-tauri/tauri.conf.json` → `plugins.updater.pubkey`，
-   并把 `endpoints` 改为你的更新服务器地址；同时把
-   `bundle.createUpdaterArtifacts` 改回 `true`。
+脚本会自动设置 `TAURI_SIGNING_PRIVATE_KEY=.keys\kiosk.key`（无密码）。
+换机器构建时把 `.keys/` 目录带上，或重新生成密钥对并同步替换各配置中的公钥。
 
-3. **打包时带私钥**（用于签名更新产物）：
+2. **生成 latest.json** 并与安装包、`.sig` 一起上传到更新服务器对应环境目录：
 
-```bash
-export TAURI_SIGNING_PRIVATE_KEY=~/.tauri/kiosk.key          # Windows: set TAURI_SIGNING_PRIVATE_KEY=...
-export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=你的密码            # 无密码可留空
-cargo tauri build
+```json
+{
+  "version": "0.2.0",
+  "notes": "更新说明",
+  "pub_date": "2026-11-26T00:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "<.sig 文件的文本内容>",
+      "url": "https://updates.elecbalance.com/kiosk/Elecbalance.Kiosk_0.2.0_x64-setup.exe"
+    },
+    "darwin-x86_64":  { "signature": "...", "url": ".../.app.tar.gz" },
+    "darwin-aarch64": { "signature": "...", "url": ".../.app.tar.gz" }
+  }
+}
 ```
 
-构建会自动生成更新产物：`*.exe`（NSIS 安装包）、`*.exe.sig` 签名、`latest.json` 版本清单，
-位于 `src-tauri/target/release/bundle/`。
+3. 客户端启动后自动拉取 `latest.json` → 比对版本 → 验签 → 下载安装 → 自动重启。
 
-4. **发布**：把安装包、`.sig`、`latest.json` 上传到更新服务器同一目录即可。
-   客户端启动时拉取 `latest.json`，比对版本号 → 验签 → 下载安装 → 自动重启。
+### 内部使用（无签名，临时模式）
+
+- **Windows**：直接 `cargo tauri build` 出 NSIS 安装包（基础配置 `createUpdaterArtifacts: false`，
+  不需要签名密钥）。因未做代码签名，首次运行可能触发 SmartScreen 提示。
+- **macOS**：在 Mac 上 `cargo tauri build --bundles dmg`。未签名包被 Gatekeeper 拦时：
+  右键 App →「打开」，或 `xattr -d com.apple.quarantine "/Applications/Elecbalance Kiosk.app"`。
 
 ### 注意
 
 - macOS 端更新产物为 `.app.tar.gz` + `.sig`，同样由 `cargo tauri build` 自动生成
-- 打正式安装包前记得把 `"createUpdaterArtifacts": true` 保持开启；日常本地调试不签名时
-  用 `cargo build` 不受影响
-- 私钥丢失则旧版本客户端无法验证新版本更新包，务必备份
+- 私钥丢失则旧版本客户端无法验证新版本更新包，务必备份 `.keys/`
+- dev/test 包与生产包 identifier 不同，各自只检查自己环境的更新端点，不会互相串更新
 
 ## 后续增强路线
 

@@ -86,6 +86,7 @@ fn main() {
             cancel_exit_exam,
             confirm_exit_exam,
             exit_app,
+            get_app_env,
             admin_exit,
             admin_close
         ])
@@ -391,6 +392,12 @@ async fn confirm_exit_exam(app: tauri::AppHandle) {
 #[tauri::command]
 fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
+}
+
+/// 前端读取当前运行环境（dev/test/prod），用于展示环境标识
+#[tauri::command]
+fn get_app_env() -> String {
+    lockdown::APP_ENV.to_string()
 }
 
 /// 呼出管理员退出口令窗（已有则聚焦）

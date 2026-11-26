@@ -90,6 +90,7 @@
   </style>
 </head>
 <body>
+  <div id="env-badge" style="display:none; position:fixed; top:10px; right:12px; z-index:999; background:#f59e0b; color:#fff; font-size:12px; font-weight:600; padding:4px 12px; border-radius:999px; letter-spacing:1px; user-select:none;"></div>
   <div class="shell">
     <div class="hero">
       <div class="hero-mark">
@@ -126,6 +127,16 @@
   </div>
   <script>
     const { invoke } = window.__TAURI__.core;
+    // 环境标识：dev/test 显示醒目角标，prod 不显示
+    invoke('get_app_env').then((env) => {
+      if (env && env !== 'prod') {
+        const badge = document.getElementById('env-badge');
+        const label = { dev: '开发环境', test: '测试环境' }[env] || env;
+        badge.textContent = label;
+        badge.style.display = 'block';
+        document.title = `山西省电力仿真考试客户端（${label}）`;
+      }
+    }).catch(() => {});
     const enterBtn = document.getElementById('enter');
     const statusText = document.getElementById('status-text');
     const statusDot = document.getElementById('status-dot');

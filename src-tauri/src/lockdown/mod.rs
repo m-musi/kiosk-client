@@ -9,15 +9,75 @@
 
 use std::sync::atomic::AtomicBool;
 
-/// 考试页面地址（唯一配置点）
-pub const EXAM_URL: &str = "https://sim.elecbalance.com/login";
+// ============ 分环境配置（编译期决定，打包时通过环境变量切换） ============
+//
+// 三个环境，打包方式见 scripts/build.cmd 与 README「分环境打包」：
+//   本地开发：KIOSK_ENV=dev
+//   测试环境：KIOSK_ENV=test
+//   生产环境：KIOSK_ENV=prod（默认，不设变量时也是 prod）
+
+/// const 上下文可用的字符串相等比较（const 里不能对 &str 用 == / match）
+const fn const_str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// 运行环境标识：dev / test / prod（编译期固定，前端可通过 get_app_env 读取展示）
+pub const APP_ENV: &str = match option_env!("KIOSK_ENV") {
+    Some(env) => {
+        if const_str_eq(env, "dev") {
+            "dev"
+        } else if const_str_eq(env, "test") {
+            "test"
+        } else {
+            "prod"
+        }
+    }
+    None => "prod",
+};
+
+/// 本地开发环境考试页地址
+const EXAM_URL_DEV: &str = "http://dev.internal.elecbalance.com/login";
+/// 测试环境考试页地址
+const EXAM_URL_TEST: &str = "http://test.internal.elecbalance.com/login";
+/// 生产环境考试页地址
+const EXAM_URL_PROD: &str = "https://sim.elecbalance.com/login";
+
+/// 考试页面地址（唯一配置点）：
+/// 1. 打包时设置 KIOSK_EXAM_URL 可完全覆盖；
+/// 2. 否则按 KIOSK_ENV 选择 dev/test/prod 对应地址。
+pub const EXAM_URL: &str = match option_env!("KIOSK_EXAM_URL") {
+    Some(url) => url,
+    None => {
+        if const_str_eq(APP_ENV, "dev") {
+            EXAM_URL_DEV
+        } else if const_str_eq(APP_ENV, "test") {
+            EXAM_URL_TEST
+        } else {
+            EXAM_URL_PROD
+        }
+    }
+};
+
+/// 自动更新总开关：默认开启（后台线程检查，不阻塞启动；
+/// updater 未配置 pubkey 时会静默跳过）。打包时设 KIOSK_UPDATER=0 可关闭。
+pub const UPDATER_ENABLED: bool = match option_env!("KIOSK_UPDATER") {
+    Some(v) => !const_str_eq(v, "0"),
+    None => true,
+};
 
 /// 当前是否处于霸屏锁定状态。引导页与键盘钩子/守护线程共用。
 pub static LOCK_ACTIVE: AtomicBool = AtomicBool::new(false);
-
-/// 自动更新总开关。当前未启用签名更新（pubkey 为空、createUpdaterArtifacts=false），
-/// 打开会在启动时阻塞网络请求，导致引导页无法显示。启用签名更新前保持 false。
-pub const UPDATER_ENABLED: bool = false;
 
 // ============ 管理员退出 ============
 
