@@ -18,6 +18,7 @@
         "decorations": true,
         "fullscreen": false,
         "resizable": false,
+        "center": true,
         "visible": true
       }
     ],

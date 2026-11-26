@@ -326,9 +326,29 @@ fn cancel_exit_exam(app: tauri::AppHandle) {
     exam_log("exit confirm cancelled (hidden)");
 }
 
-/// 确认退出：解除锁定、关闭考试相关窗口，回到引导页
+/// 清空内嵌考试网页在本机留下的所有存储数据。
+///
+/// 覆盖 exam 窗口和所有副屏遮挡窗口（block-*，加载同一考试站点）：
+/// 1. eval 同步清 localStorage/sessionStorage —— 页面内立即生效，作为兜底；
+/// 2. clear_all_browsing_data 清 cookies、IndexedDB、HTTP 缓存、service worker
+///    （Windows 走 ICoreWebView2Profile2::ClearBrowsingDataAll，删除是异步落盘的，
+///    调用后需短暂等待再关窗，否则删除可能被窗口销毁中止）。
+fn clear_exam_web_storage(app: &tauri::AppHandle) {
+    for (label, w) in app.webview_windows() {
+        if label == "exam" || label.starts_with("block-") {
+            let _ = w.eval("try{localStorage.clear();sessionStorage.clear();}catch(e){}");
+            if let Err(e) = w.clear_all_browsing_data() {
+                exam_log(&format!("clear browsing data({label}) failed: {e}"));
+            } else {
+                exam_log(&format!("clear browsing data({label}) requested"));
+            }
+        }
+    }
+}
+
+/// 确认退出：解除锁定、清空考试页本地存储、关闭考试相关窗口，回到引导页
 #[tauri::command]
-fn confirm_exit_exam(app: tauri::AppHandle) {
+async fn confirm_exit_exam(app: tauri::AppHandle) {
     if let Some(exam) = app.get_webview_window("exam") {
         lockdown::deactivate(&exam);
     }
@@ -337,6 +357,14 @@ fn confirm_exit_exam(app: tauri::AppHandle) {
     // 否则退出考试后按钮会残留在屏幕上。
     #[cfg(target_os = "windows")]
     fab_win::destroy();
+
+    clear_exam_web_storage(&app);
+    // 浏览数据删除是异步的，留 300ms 落盘后再销毁 webview
+    tauri::async_runtime::spawn_blocking(|| {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    })
+    .await
+    .ok();
 
     let labels: Vec<String> = app
         .webview_windows()
@@ -405,6 +433,9 @@ fn admin_exit(password: String, app: tauri::AppHandle) -> Result<(), String> {
         if let Some(exam) = app.get_webview_window("exam") {
             lockdown::deactivate(&exam);
         }
+        clear_exam_web_storage(&app);
+        // 给异步的浏览数据删除留出落盘时间
+        std::thread::sleep(std::time::Duration::from_millis(300));
         app.exit(0);
         Ok(())
     } else {
