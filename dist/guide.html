@@ -22,6 +22,8 @@
       width: 100%;
       background: #fff;
       overflow: hidden;
+      /* Windows 11 会为无边框窗口自动加圆角；macOS 不会，这里显式补齐一致外观 */
+      border-radius: 12px;
     }
     .hero {
       background: #0f6e56;

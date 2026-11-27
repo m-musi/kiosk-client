@@ -51,11 +51,30 @@
   </div>
   <script>
     const { invoke } = window.__TAURI__.core;
+    const okBtn = document.getElementById('ok');
+    const resetOk = () => { okBtn.disabled = false; };
+
+    // 该窗口退出时只是 hide、webview 复用，不会重新加载页面。
+    // 每次重新显示（focus / visibilitychange）都复位确定按钮，防止上次点击后
+    // 遗留的 disabled 状态让第二次点击完全没反应。
+    window.addEventListener('focus', resetOk);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) resetOk();
+    });
+    resetOk();
+
     document.getElementById('cancel').addEventListener('click', () => invoke('cancel_exit_exam'));
-    document.getElementById('ok').addEventListener('click', async () => {
-      const btn = document.getElementById('ok');
-      btn.disabled = true;
-      await invoke('confirm_exit_exam');
+    okBtn.addEventListener('click', async () => {
+      // 不用 disabled 做长等待锁：退出命令已异步化、很快返回，
+      // 这里仅短暂置灰提供点击反馈，随后立即恢复，避免复用窗口时卡在禁用态。
+      okBtn.disabled = true;
+      try {
+        await invoke('confirm_exit_exam');
+      } catch (e) {
+        console.error('confirm_exit_exam failed', e);
+      } finally {
+        setTimeout(resetOk, 200);
+      }
     });
   </script>
 </body>

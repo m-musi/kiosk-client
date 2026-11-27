@@ -46,18 +46,21 @@ const OPT_DISABLE_PROCESS_SWITCHING: u64 = 1 << 5; // 32  disableProcessSwitchin
 const OPT_DISABLE_FORCE_QUIT: u64 = 1 << 6; // 64  disableForceQuit → 禁 Cmd+Opt+Esc
 const OPT_DISABLE_SESSION_TERMINATION: u64 = 1 << 7; // 128 disableSessionTermination
 const OPT_DISABLE_HIDE_APPLICATION: u64 = 1 << 8; // 256 disableHideApplication
-const OPT_FULL_SCREEN: u64 = 1 << 10; // 1024 fullScreen
+#[allow(dead_code)]
+const OPT_FULL_SCREEN: u64 = 1 << 10; // 1024 fullScreen（当前刻意不启用，见下方说明）
 // 注：AppKit 没有「禁用 Mission Control / 通知中心」的 presentation 选项，
 // 1<<11 是 autoHideToolbar、1<<12 是 disableCursorLocationAssistance，不要误用。
 
+// 不启用 OPT_FULL_SCREEN：该位会让 macOS 进入原生全屏 Space，顶部出现一条
+// 标题/菜单区域；当前 exam 窗口已是无边框铺满，菜单由 hideMenuBar 隐藏即可。
+// 同时该位也会改变窗口层级，导致后置创建的 exam-fab 被盖住。
 const PRESENTATION_KIOSK: u64 = OPT_HIDE_DOCK
     | OPT_HIDE_MENU_BAR
     | OPT_DISABLE_APPLE_MENU
     | OPT_DISABLE_PROCESS_SWITCHING
     | OPT_DISABLE_FORCE_QUIT
     | OPT_DISABLE_SESSION_TERMINATION
-    | OPT_DISABLE_HIDE_APPLICATION
-    | OPT_FULL_SCREEN;
+    | OPT_DISABLE_HIDE_APPLICATION;
 
 /// 轻量文件日志，写入 /tmp/elecbalance-kiosk.log，便于在用户机器上验证锁定状态
 fn klog(msg: &str) {
@@ -90,7 +93,6 @@ fn apply_presentation_options() {
             ("disableForceQuit", OPT_DISABLE_FORCE_QUIT),
             ("disableSessionTermination", OPT_DISABLE_SESSION_TERMINATION),
             ("disableHideApplication", OPT_DISABLE_HIDE_APPLICATION),
-            ("fullScreen", OPT_FULL_SCREEN),
         ];
         let lost: Vec<&str> = expected
             .iter()
@@ -141,11 +143,24 @@ fn kiosk_tick() {
 }
 
 pub fn activate(window: &WebviewWindow) {
-    // 窗口层：全屏 + 无边框 + 置顶
-    let _ = window.set_fullscreen(true);
+    // 窗口层：铺满主屏 + 无边框 + 置顶。
+    // 不再调用原生全屏：macOS 上 Full Screen 切换会让 WKWebView 偶发不绘制，
+    // 表现为进入考试后白屏，右键刷新才恢复。无边框窗口 + kiosk 演示选项即可等价。
     let _ = window.set_decorations(false);
-    let _ = window.set_always_on_top(true);
+    // 不要给 exam 窗口设置 always_on_top：exam-fab / exit-confirm 是后置窗口，
+    // 同层级下 exam 置顶会把它们盖住，表现为悬浮退出按钮不显示。
+    // Kiosk 演示选项本身已保证本应用前台且菜单/Dock 隐藏，无需窗口级置顶。
     let _ = window.set_focus();
+    if let Ok(Some(monitor)) = window.primary_monitor() {
+        let _ = window.set_position(tauri::PhysicalPosition::new(
+            monitor.position().x,
+            monitor.position().y,
+        ));
+        let _ = window.set_size(tauri::PhysicalSize::new(
+            monitor.size().width,
+            monitor.size().height,
+        ));
+    }
 
     super::LOCK_ACTIVE.store(true, Ordering::SeqCst);
 

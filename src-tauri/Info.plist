@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- dev/test 考试页是 http://，macOS ATS 默认会拦截 WKWebView 的明文加载，
+       表现就是进入考试后白屏（右键刷新也不一定恢复）。仅放行 WebView 内容。 -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoadsInWebContent</key>
+    <true/>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>test.internal.elecbalance.com</key>
+      <dict>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <true/>
+        <key>NSExceptionRequiresForwardSecrecy</key>
+        <false/>
+        <key>NSExceptionMinimumTLSVersion</key>
+        <string>TLSv1.0</string>
+      </dict>
+      <key>dev.internal.elecbalance.com</key>
+      <dict>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <true/>
+        <key>NSExceptionRequiresForwardSecrecy</key>
+        <false/>
+        <key>NSExceptionMinimumTLSVersion</key>
+        <string>TLSv1.0</string>
+      </dict>
+    </dict>
+  </dict>
+</dict>
+</plist>
